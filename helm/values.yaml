@@ -1,0 +1,59 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/yourorg/my-gin-app
+  pullPolicy: IfNotPresent
+  tag: latest
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  ingressNamespace: traefik
+
+istio:
+  enabled: false
+  gateway: istio-system/ingressgateway
+  retries:
+    attempts: 3
+    perTryTimeout: 5s
+
+ingress:
+  enabled: true
+  baseDomain: cluster.lakesideinn.space
+  auth:
+    enabled: true
+
+probes:
+  liveness:
+    path: /health
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    failureThreshold: 3
+  readiness:
+    path: /health
+    initialDelaySeconds: 3
+    periodSeconds: 10
+    failureThreshold: 3
