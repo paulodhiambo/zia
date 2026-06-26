@@ -432,7 +432,7 @@ If you discover a security issue, **do not open a public GitHub issue** — emai
 
 ## License
 
-Proprietary — All rights reserved, © Zia. *(Update this section once a license model is decided — internal/closed-source vs. open-core.)*
+Proprietary — All rights reserved, © Zia.
 
 ---
 
