@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"zia/internal/connector"
+	"zia/internal/connector/kcb"
 	"zia/internal/connector/mpesa"
 	"zia/internal/idempotency"
 	"zia/internal/ledger"
@@ -100,6 +101,10 @@ func main() {
 	if cfg := mpesa.ConfigFromEnv(); cfg.ConsumerKey != "" {
 		registry.Register("mpesa", mpesa.New(cfg))
 		logger.Info("registered mpesa connector")
+	}
+	if cfg := kcb.ConfigFromEnv(); cfg.ConsumerKey != "" {
+		registry.Register("kcb", kcb.New(cfg))
+		logger.Info("registered kcb connector")
 	}
 
 	orc := orchestrator.New(
