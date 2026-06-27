@@ -8,9 +8,11 @@ import (
 )
 
 type Dependencies struct {
-	Logger        *zap.Logger
-	PIHandler     *PaymentIntentHandler
-	WebhookHandler *WebhookHandler
+	Logger          *zap.Logger
+	PIHandler       *PaymentIntentHandler
+	WebhookHandler  *WebhookHandler
+	MerchantHandler *MerchantHandler
+	AuthMiddleware  func(http.Handler) http.Handler
 }
 
 func NewRouter(deps Dependencies) http.Handler {
@@ -30,6 +32,18 @@ func NewRouter(deps Dependencies) http.Handler {
 		r.Post("/", deps.PIHandler.Create)
 		r.Get("/{id}", deps.PIHandler.Get)
 	})
+
+	if deps.MerchantHandler != nil {
+		r.Route("/v1/merchant", func(r chi.Router) {
+			r.Use(deps.AuthMiddleware)
+			r.Get("/dashboard", deps.MerchantHandler.Dashboard)
+			r.Get("/transactions", deps.MerchantHandler.ListTransactions)
+			r.Get("/balance", deps.MerchantHandler.GetBalance)
+			r.Get("/payouts", deps.MerchantHandler.ListPayouts)
+			r.Get("/settings", deps.MerchantHandler.GetSettings)
+			r.Put("/settings", deps.MerchantHandler.UpdateSettings)
+		})
+	}
 
 	return r
 }

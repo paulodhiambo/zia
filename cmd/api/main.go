@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"zia/internal/api"
+	"zia/internal/authn"
 	"zia/internal/connector"
 	"zia/internal/connector/kcb"
 	"zia/internal/connector/mpesa"
@@ -85,6 +86,8 @@ func main() {
 	piRepo := repository.NewPaymentIntent(nil)
 	attRepo := repository.NewAttempt(nil)
 	whRepo := repository.NewWebhookEvent(nil)
+	merchantRepo := repository.NewMerchant(nil)
+	payoutRepo := repository.NewPayout(nil)
 	ledRepo := repository.NewLedger(nil)
 	idempotencyStore := idempotency.NewStore(rdb)
 	riskEng := risk.NewEngine()
@@ -146,11 +149,15 @@ func main() {
 
 	piHandler := api.NewPaymentIntentHandler(piSvc)
 	whHandler := api.NewWebhookHandler(registry, whRepo, dedupStore, webhookProc, logger)
+	merchantHandler := api.NewMerchantHandler(merchantRepo, piRepo, payoutRepo, ledRepo, logger)
+	authMiddleware := authn.Middleware(merchantRepo)
 
 	router := api.NewRouter(api.Dependencies{
-		Logger:        logger,
-		PIHandler:     piHandler,
-		WebhookHandler: whHandler,
+		Logger:          logger,
+		PIHandler:       piHandler,
+		WebhookHandler:  whHandler,
+		MerchantHandler: merchantHandler,
+		AuthMiddleware:  authMiddleware,
 	})
 
 	srv := &http.Server{
