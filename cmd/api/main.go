@@ -17,6 +17,7 @@ import (
 	"zia/internal/connector/pesalink"
 	"zia/internal/idempotency"
 	"zia/internal/ledger"
+	"zia/internal/notification"
 	"zia/internal/orchestrator"
 	"zia/internal/repository"
 	"zia/internal/risk"
@@ -122,6 +123,11 @@ func main() {
 		js, _ = nc.JetStream()
 	}
 
+	var notifDispatcher *notification.Dispatcher
+	if js != nil {
+		notifDispatcher = notification.NewDispatcher(nil, js, logger)
+	}
+
 	orc := orchestrator.New(
 		piRepo,
 		attRepo,
@@ -131,6 +137,7 @@ func main() {
 		idempotencyStore,
 		logger,
 		ledgerEng,
+		notifDispatcher,
 	)
 
 	webhookProc := webhook.NewProcessor(orc, js, logger)

@@ -9,6 +9,7 @@ import (
 	"zia/internal/domain"
 	"zia/internal/idempotency"
 	"zia/internal/ledger"
+	"zia/internal/notification"
 	"zia/internal/repository"
 	"zia/internal/risk"
 	"zia/internal/routing"
@@ -24,6 +25,7 @@ type Engine struct {
 	router      *routing.Engine
 	risk        *risk.Engine
 	idempotency *idempotency.Store
+	notif       *notification.Dispatcher
 	logger      *zap.Logger
 	ledger      *ledger.Engine
 }
@@ -37,6 +39,7 @@ func New(
 	idempotency *idempotency.Store,
 	logger *zap.Logger,
 	ledger *ledger.Engine,
+	notif *notification.Dispatcher,
 ) *Engine {
 	return &Engine{
 		piRepo:      piRepo,
@@ -45,6 +48,7 @@ func New(
 		router:      router,
 		risk:        risk,
 		idempotency: idempotency,
+		notif:       notif,
 		logger:      logger,
 		ledger:      ledger,
 	}
@@ -257,6 +261,25 @@ func (e *Engine) HandleWebhookEvent(ctx context.Context, evt connector.WebhookEv
 				zap.Error(err),
 			)
 			return fmt.Errorf("ledger post: %w", err)
+		}
+	}
+
+	if e.notif != nil {
+		if err := e.notif.Publish(ctx, notification.NotificationEvent{
+			EventType:    fmt.Sprintf("payment.%s", newPIStatus),
+			PIID:         pi.ID,
+			MerchantID:   pi.MerchantID,
+			AmountMinor:  pi.AmountMinor,
+			Currency:     pi.Currency,
+			PSP:          attempt.PSP,
+			PSPReference: attempt.PSPReference,
+			Status:       string(newPIStatus),
+			Timestamp:    time.Now().UTC().Format(time.RFC3339),
+		}); err != nil {
+			e.logger.Error("failed to publish notification event",
+				zap.String("pi_id", pi.ID),
+				zap.Error(err),
+			)
 		}
 	}
 

@@ -14,6 +14,7 @@ import (
 	"zia/internal/connector/pesalink"
 	"zia/internal/idempotency"
 	"zia/internal/ledger"
+	"zia/internal/notification"
 	"zia/internal/orchestrator"
 	"zia/internal/repository"
 	"zia/internal/risk"
@@ -98,6 +99,9 @@ func main() {
 	cb := routing.NewCircuitBreaker()
 	routingEng := routing.NewEngine(cb, logger)
 	ledgerEng := ledger.NewEngine(ledRepo)
+	merchantRepo := repository.NewMerchant(nil)
+	notifDispatcher := notification.NewDispatcher(merchantRepo, js, logger)
+
 	registry := connector.NewRegistry()
 
 	if cfg := mpesa.ConfigFromEnv(); cfg.ConsumerKey != "" {
@@ -126,15 +130,20 @@ func main() {
 		idempotencyStore,
 		logger,
 		ledgerEng,
+		notifDispatcher,
 	)
 
 	processor := webhook.NewProcessor(orc, js, logger)
+
+	if err := notifDispatcher.StartConsumer(ctx); err != nil {
+		logger.Fatal("failed to start notification consumer", zap.Error(err))
+	}
 
 	if err := processor.StartConsumer(ctx); err != nil {
 		logger.Fatal("failed to start consumer", zap.Error(err))
 	}
 
-	logger.Info("worker started, consuming from zia.webhook.received")
+	logger.Info("worker started, consuming from zia.webhook.received and zia.notification.>")
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
