@@ -8,6 +8,7 @@ import (
 	"zia/internal/connector"
 	"zia/internal/domain"
 	"zia/internal/idempotency"
+	"zia/internal/ledger"
 	"zia/internal/repository"
 	"zia/internal/risk"
 	"zia/internal/routing"
@@ -24,6 +25,7 @@ type Engine struct {
 	risk        *risk.Engine
 	idempotency *idempotency.Store
 	logger      *zap.Logger
+	ledger      *ledger.Engine
 }
 
 func New(
@@ -34,6 +36,7 @@ func New(
 	risk *risk.Engine,
 	idempotency *idempotency.Store,
 	logger *zap.Logger,
+	ledger *ledger.Engine,
 ) *Engine {
 	return &Engine{
 		piRepo:      piRepo,
@@ -43,6 +46,7 @@ func New(
 		risk:        risk,
 		idempotency: idempotency,
 		logger:      logger,
+		ledger:      ledger,
 	}
 }
 
@@ -245,5 +249,24 @@ func (e *Engine) HandleWebhookEvent(ctx context.Context, evt connector.WebhookEv
 		return fmt.Errorf("update pi status: %w", err)
 	}
 
+	if newPIStatus == domain.PISucceeded {
+		fee := computePlatformFee(pi.AmountMinor)
+		if err := e.ledger.PostCollection(ctx, pi.MerchantID, pi.ID, attempt.PSP, pi.AmountMinor, pi.Currency, fee); err != nil {
+			e.logger.Error("ledger posting failed for succeeded payment",
+				zap.String("pi_id", pi.ID),
+				zap.Error(err),
+			)
+			return fmt.Errorf("ledger post: %w", err)
+		}
+	}
+
 	return nil
+}
+
+func computePlatformFee(amountMinor int64) int64 {
+	fee := amountMinor * 5 / 100
+	if fee < 100 {
+		return 100
+	}
+	return fee
 }

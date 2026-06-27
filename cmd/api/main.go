@@ -12,6 +12,7 @@ import (
 	"zia/internal/api"
 	"zia/internal/connector"
 	"zia/internal/idempotency"
+	"zia/internal/ledger"
 	"zia/internal/orchestrator"
 	"zia/internal/repository"
 	"zia/internal/risk"
@@ -78,10 +79,13 @@ func main() {
 	piRepo := repository.NewPaymentIntent(nil)
 	attRepo := repository.NewAttempt(nil)
 	whRepo := repository.NewWebhookEvent(nil)
+	ledRepo := repository.NewLedger(nil)
 	idempotencyStore := idempotency.NewStore(rdb)
 	riskEng := risk.NewEngine()
 	cb := routing.NewCircuitBreaker()
 	routingEng := routing.NewEngine(cb, logger)
+
+	ledgerEng := ledger.NewEngine(ledRepo)
 
 	registry := connector.NewRegistry()
 
@@ -95,6 +99,7 @@ func main() {
 		riskEng,
 		idempotencyStore,
 		logger,
+		ledgerEng,
 	)
 
 	piSvc := service.NewPaymentIntent(orc)
