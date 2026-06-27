@@ -10,6 +10,7 @@ import (
 	"zia/internal/connector"
 	"zia/internal/connector/kcb"
 	"zia/internal/connector/mpesa"
+	"zia/internal/connector/paystack"
 	"zia/internal/idempotency"
 	"zia/internal/ledger"
 	"zia/internal/orchestrator"
@@ -105,6 +106,10 @@ func main() {
 	if cfg := kcb.ConfigFromEnv(); cfg.ConsumerKey != "" {
 		registry.Register("kcb", kcb.New(cfg))
 		logger.Info("registered kcb connector")
+	}
+	if cfg := paystack.ConfigFromEnv(); cfg.SecretKey != "" {
+		registry.Register("paystack", paystack.New(cfg))
+		logger.Info("registered paystack connector")
 	}
 
 	orc := orchestrator.New(
