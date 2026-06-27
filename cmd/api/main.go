@@ -10,8 +10,17 @@ import (
 	"time"
 
 	"zia/internal/api"
+	"zia/internal/connector"
+	"zia/internal/idempotency"
+	"zia/internal/orchestrator"
+	"zia/internal/repository"
+	"zia/internal/risk"
+	"zia/internal/routing"
+	"zia/internal/service"
 	"zia/internal/telemetry"
+	"zia/internal/webhook"
 
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
@@ -61,8 +70,42 @@ func main() {
 	defer logger.Sync()
 	zap.ReplaceGlobals(logger)
 
+	rdb := redis.NewClient(&redis.Options{Addr: cfg.redisURL})
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		logger.Warn("redis not available, continuing without cache", zap.Error(err))
+	}
+
+	piRepo := repository.NewPaymentIntent(nil)
+	attRepo := repository.NewAttempt(nil)
+	whRepo := repository.NewWebhookEvent(nil)
+	idempotencyStore := idempotency.NewStore(rdb)
+	riskEng := risk.NewEngine()
+	cb := routing.NewCircuitBreaker()
+	routingEng := routing.NewEngine(cb, logger)
+
+	registry := connector.NewRegistry()
+
+	dedupStore := webhook.NewDedupStore(rdb)
+
+	orc := orchestrator.New(
+		piRepo,
+		attRepo,
+		registry,
+		routingEng,
+		riskEng,
+		idempotencyStore,
+		logger,
+	)
+
+	piSvc := service.NewPaymentIntent(orc)
+
+	piHandler := api.NewPaymentIntentHandler(piSvc)
+	whHandler := api.NewWebhookHandler(registry, whRepo, orc, dedupStore, logger)
+
 	router := api.NewRouter(api.Dependencies{
-		Logger: logger,
+		Logger:        logger,
+		PIHandler:     piHandler,
+		WebhookHandler: whHandler,
 	})
 
 	srv := &http.Server{
