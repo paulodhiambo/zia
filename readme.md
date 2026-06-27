@@ -63,7 +63,7 @@ A **JavaScript embeddable checkout widget** is on the roadmap (see [Roadmap](#ro
 | **PayPal** | Collection (cards/wallet) | Global | Orders API v2, redirect/approve/capture |
 | **Pesalink** | Settlement, merchant payouts, FX/treasury | Global | Quote → Recipient → Transfer → Fund |
 
-> **Note:** Pesalink is intentionally not a "collection" method in this system — it has no consumer-facing checkout. It is the engine behind merchant settlement and cross-currency payouts. See `ARCHITECTURE.md §5.1` for the rationale.
+> **Note:** Pesalink is intentionally not a "collection" method in this system — it has no consumer-facing checkout. It is the engine behind merchant settlement and cross-currency payouts. See `architecture.md §5.1` for the rationale.
 
 ---
 

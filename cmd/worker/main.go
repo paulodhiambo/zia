@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"zia/internal/connector"
+	"zia/internal/connector/mpesa"
 	"zia/internal/idempotency"
 	"zia/internal/ledger"
 	"zia/internal/orchestrator"
@@ -95,6 +96,11 @@ func main() {
 	routingEng := routing.NewEngine(cb, logger)
 	ledgerEng := ledger.NewEngine(ledRepo)
 	registry := connector.NewRegistry()
+
+	if cfg := mpesa.ConfigFromEnv(); cfg.ConsumerKey != "" {
+		registry.Register("mpesa", mpesa.New(cfg))
+		logger.Info("registered mpesa connector")
+	}
 
 	orc := orchestrator.New(
 		piRepo,
