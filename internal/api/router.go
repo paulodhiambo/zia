@@ -1,18 +1,23 @@
 package api
 
 import (
+	"embed"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 )
 
+//go:embed checkout.js
+var checkoutFS embed.FS
+
 type Dependencies struct {
-	Logger          *zap.Logger
-	PIHandler       *PaymentIntentHandler
-	WebhookHandler  *WebhookHandler
-	MerchantHandler *MerchantHandler
-	AuthMiddleware  func(http.Handler) http.Handler
+	Logger           *zap.Logger
+	PIHandler        *PaymentIntentHandler
+	WebhookHandler   *WebhookHandler
+	MerchantHandler  *MerchantHandler
+	CheckoutHandler  *CheckoutHandler
+	AuthMiddleware   func(http.Handler) http.Handler
 }
 
 func NewRouter(deps Dependencies) http.Handler {
@@ -42,6 +47,17 @@ func NewRouter(deps Dependencies) http.Handler {
 			r.Get("/payouts", deps.MerchantHandler.ListPayouts)
 			r.Get("/settings", deps.MerchantHandler.GetSettings)
 			r.Put("/settings", deps.MerchantHandler.UpdateSettings)
+		})
+	}
+
+	if deps.CheckoutHandler != nil {
+		r.With(deps.AuthMiddleware).Post("/v1/checkout", deps.CheckoutHandler.Create)
+		r.Get("/v1/checkout/{token}", deps.CheckoutHandler.Status)
+
+		r.Get("/checkout.js", func(w http.ResponseWriter, r *http.Request) {
+			data, _ := checkoutFS.ReadFile("checkout.js")
+			w.Header().Set("Content-Type", "application/javascript")
+			w.Write(data)
 		})
 	}
 

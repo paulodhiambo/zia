@@ -88,6 +88,7 @@ func main() {
 	whRepo := repository.NewWebhookEvent(nil)
 	merchantRepo := repository.NewMerchant(nil)
 	payoutRepo := repository.NewPayout(nil)
+	checkoutRepo := repository.NewCheckout(nil)
 	ledRepo := repository.NewLedger(nil)
 	idempotencyStore := idempotency.NewStore(rdb)
 	riskEng := risk.NewEngine()
@@ -150,6 +151,7 @@ func main() {
 	piHandler := api.NewPaymentIntentHandler(piSvc)
 	whHandler := api.NewWebhookHandler(registry, whRepo, dedupStore, webhookProc, logger)
 	merchantHandler := api.NewMerchantHandler(merchantRepo, piRepo, payoutRepo, ledRepo, logger)
+	checkoutHandler := api.NewCheckoutHandler(piSvc, checkoutRepo, piRepo, logger)
 	authMiddleware := authn.Middleware(merchantRepo)
 
 	router := api.NewRouter(api.Dependencies{
@@ -157,6 +159,7 @@ func main() {
 		PIHandler:       piHandler,
 		WebhookHandler:  whHandler,
 		MerchantHandler: merchantHandler,
+		CheckoutHandler: checkoutHandler,
 		AuthMiddleware:  authMiddleware,
 	})
 
