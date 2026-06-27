@@ -14,6 +14,7 @@ import (
 	"zia/internal/connector/kcb"
 	"zia/internal/connector/mpesa"
 	"zia/internal/connector/paystack"
+	"zia/internal/connector/pesalink"
 	"zia/internal/idempotency"
 	"zia/internal/ledger"
 	"zia/internal/orchestrator"
@@ -104,6 +105,10 @@ func main() {
 	if cfg := paystack.ConfigFromEnv(); cfg.SecretKey != "" {
 		registry.Register("paystack", paystack.New(cfg))
 		logger.Info("registered paystack connector")
+	}
+	if cfg := pesalink.ConfigFromEnv(); cfg.APIKey != "" {
+		registry.Register("pesalink", pesalink.New(cfg))
+		logger.Info("registered pesalink connector")
 	}
 
 	dedupStore := webhook.NewDedupStore(rdb)
