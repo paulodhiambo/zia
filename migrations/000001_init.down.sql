@@ -1,0 +1,11 @@
+DROP TABLE IF EXISTS pesalink_recipients;
+DROP TABLE IF EXISTS routing_rules;
+DROP TABLE IF EXISTS checkout_sessions;
+DROP TABLE IF EXISTS payouts;
+DROP TABLE IF EXISTS refunds;
+DROP TABLE IF EXISTS webhook_events;
+DROP TABLE IF EXISTS ledger_entries;
+DROP TABLE IF EXISTS attempts;
+DROP TABLE IF EXISTS payment_intents;
+DROP TABLE IF EXISTS api_keys;
+DROP TABLE IF EXISTS merchants;
