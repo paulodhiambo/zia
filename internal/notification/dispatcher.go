@@ -102,7 +102,9 @@ func (d *Dispatcher) StartConsumer(ctx context.Context) error {
 					zap.Error(err),
 					zap.ByteString("data", msg.Data),
 				)
-				msg.Nak()
+				if err := msg.Nak(); err != nil {
+					d.logger.Error("nats nak failed", zap.Error(err))
+				}
 				continue
 			}
 
@@ -118,7 +120,9 @@ func (d *Dispatcher) StartConsumer(ctx context.Context) error {
 				continue
 			}
 
-			msg.Ack()
+			if err := msg.Ack(); err != nil {
+				d.logger.Error("nats ack failed", zap.Error(err))
+			}
 		}
 	}()
 

@@ -43,7 +43,7 @@ func Middleware(repo repository.MerchantRepository) func(http.Handler) http.Hand
 func writeUnauthorized(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"statusCode":        "1002",
 		"statusDescription": "Authentication failed",
 		"messageCode":       "401",

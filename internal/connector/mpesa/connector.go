@@ -3,10 +3,7 @@ package mpesa
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -254,7 +251,9 @@ func (c *Connector) Refund(ctx context.Context, req connector.RefundRequest) (co
 		ResponseCode             string `json:"ResponseCode"`
 	}
 	respBody, _ := io.ReadAll(resp.Body)
-	json.Unmarshal(respBody, &b2cResp)
+	if err := json.Unmarshal(respBody, &b2cResp); err != nil {
+		return connector.RefundResult{}, fmt.Errorf("parse b2c response: %w", err)
+	}
 
 	if b2cResp.ResponseCode != "0" {
 		return connector.RefundResult{}, fmt.Errorf("b2c rejected: code=%s", b2cResp.ResponseCode)
@@ -350,20 +349,3 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen]
 }
 
-func verifyIPAllowed(allowedIPs []string, remoteIP string) bool {
-	if len(allowedIPs) == 0 {
-		return true
-	}
-	for _, ip := range allowedIPs {
-		if ip == remoteIP {
-			return true
-		}
-	}
-	return false
-}
-
-func computeHMACSHA256(secret string, data []byte) string {
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(data)
-	return hex.EncodeToString(mac.Sum(nil))
-}

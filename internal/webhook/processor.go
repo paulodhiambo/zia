@@ -88,7 +88,9 @@ func (p *Processor) StartConsumer(ctx context.Context) error {
 					zap.Error(err),
 					zap.ByteString("data", msg.Data),
 				)
-				msg.Nak()
+				if err := msg.Nak(); err != nil {
+					p.logger.Error("nats nak failed", zap.Error(err))
+				}
 				continue
 			}
 
@@ -104,7 +106,9 @@ func (p *Processor) StartConsumer(ctx context.Context) error {
 				continue
 			}
 
-			msg.Ack()
+			if err := msg.Ack(); err != nil {
+				p.logger.Error("nats ack failed", zap.Error(err))
+			}
 		}
 	}()
 

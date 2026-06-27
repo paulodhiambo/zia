@@ -57,7 +57,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		r.Get("/checkout.js", func(w http.ResponseWriter, r *http.Request) {
 			data, _ := checkoutFS.ReadFile("checkout.js")
 			w.Header().Set("Content-Type", "application/javascript")
-			w.Write(data)
+			_, _ = w.Write(data)
 		})
 	}
 

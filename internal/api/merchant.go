@@ -158,7 +158,7 @@ func (h *MerchantHandler) UpdateSettings(w http.ResponseWriter, r *http.Request)
 	type settings struct {
 		WebhookURL string `json:"webhook_url"`
 	}
-	s := settings{WebhookURL: req.WebhookURL}
+	s := settings(req)
 
 	data, _ := json.Marshal(s)
 	merchant.SettlementConfig = data

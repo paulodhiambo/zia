@@ -98,5 +98,7 @@ func respondValidationError(w http.ResponseWriter, r *http.Request, fieldErrors 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		zap.L().Error("failed to encode validation error response", zap.Error(err))
+	}
 }

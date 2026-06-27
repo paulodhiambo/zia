@@ -60,13 +60,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to setup telemetry: %v", err)
 	}
-	defer shutdown(context.Background())
+	defer func() {
+		if err := shutdown(context.Background()); err != nil {
+			log.Printf("telemetry shutdown: %v", err)
+		}
+	}()
 
 	logger, err := zap.NewProduction()
 	if err != nil {
 		log.Fatalf("failed to create logger: %v", err)
 	}
-	defer logger.Sync()
+	defer func() { _ = logger.Sync() }()
 
 	rdb := redis.NewClient(&redis.Options{Addr: cfg.redisURL})
 	if err := rdb.Ping(ctx).Err(); err != nil {
