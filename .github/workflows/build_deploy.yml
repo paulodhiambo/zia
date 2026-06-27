@@ -80,7 +80,8 @@ jobs:
         run: envsubst < argocd/deployment.yaml > argocd/rendered-deployment.yaml
 
       - name: Update Helm values with new image tag
-        run: sed -i "s/tag:.*/tag: ${{ env.SHORT_SHA }}/" ${{ env.HELM_PATH }}/values.yaml
+        run: |
+          sed -i "s/tag:.*/tag: ${{ env.SHORT_SHA }}/" ${{ env.HELM_PATH }}/values.yaml
 
       - name: Commit and push updated files
         run: |
