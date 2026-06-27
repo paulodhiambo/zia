@@ -4,11 +4,18 @@ import (
 	"context"
 	"log"
 	"os"
-	"os/signal"
-	"syscall"
+	"time"
 
+	"zia/internal/connector"
+	"zia/internal/connector/kcb"
+	"zia/internal/connector/mpesa"
+	"zia/internal/connector/paystack"
+	"zia/internal/connector/pesalink"
+	"zia/internal/reconciliation"
+	"zia/internal/repository"
 	"zia/internal/telemetry"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
 
@@ -34,7 +41,7 @@ func loadConfig() config {
 func main() {
 	cfg := loadConfig()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	shutdown, err := telemetry.Setup(ctx, cfg.telemetry)
@@ -49,13 +56,41 @@ func main() {
 	}
 	defer logger.Sync()
 
-	logger.Info("cron worker starting")
+	pool, err := pgxpool.New(ctx, cfg.databaseURL)
+	if err != nil {
+		logger.Fatal("failed to connect to database", zap.Error(err))
+	}
+	defer pool.Close()
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	attRepo := repository.NewAttempt(pool)
 
-	logger.Info("cron worker shutting down")
+	registry := connector.NewRegistry()
+
+	if cfg := mpesa.ConfigFromEnv(); cfg.ConsumerKey != "" {
+		registry.Register("mpesa", mpesa.New(cfg))
+		logger.Info("registered mpesa connector")
+	}
+	if cfg := kcb.ConfigFromEnv(); cfg.ConsumerKey != "" {
+		registry.Register("kcb", kcb.New(cfg))
+		logger.Info("registered kcb connector")
+	}
+	if cfg := paystack.ConfigFromEnv(); cfg.SecretKey != "" {
+		registry.Register("paystack", paystack.New(cfg))
+		logger.Info("registered paystack connector")
+	}
+	if cfg := pesalink.ConfigFromEnv(); cfg.APIKey != "" {
+		registry.Register("pesalink", pesalink.New(cfg))
+		logger.Info("registered pesalink connector")
+	}
+
+	recon := reconciliation.NewRunner(registry, attRepo, logger)
+
+	yesterday := time.Now().UTC().Add(-24 * time.Hour)
+	if err := recon.Reconcile(ctx, yesterday); err != nil {
+		logger.Fatal("reconciliation failed", zap.Error(err))
+	}
+
+	logger.Info("reconciliation completed")
 }
 
 func getEnv(key, fallback string) string {
