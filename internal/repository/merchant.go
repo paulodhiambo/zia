@@ -9,6 +9,7 @@ import (
 type MerchantRepository interface {
 	Create(ctx context.Context, m *domain.Merchant) error
 	GetByID(ctx context.Context, id string) (*domain.Merchant, error)
+	ListAll(ctx context.Context) ([]domain.Merchant, error)
 	CreateAPIKey(ctx context.Context, k *domain.APIKey) error
 	GetAPIKeyByHash(ctx context.Context, hash string) (*domain.APIKey, error)
 	GetAPIKeyByPrefix(ctx context.Context, prefix string) (*domain.APIKey, error)
@@ -43,6 +44,27 @@ func (r *merchantRepo) GetByID(ctx context.Context, id string) (*domain.Merchant
 		return nil, err
 	}
 	return m, nil
+}
+
+func (r *merchantRepo) ListAll(ctx context.Context) ([]domain.Merchant, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT id, legal_name, country, default_currency, status, settlement_config, created_at
+		FROM merchants ORDER BY legal_name ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var merchants []domain.Merchant
+	for rows.Next() {
+		var m domain.Merchant
+		if err := rows.Scan(&m.ID, &m.LegalName, &m.Country, &m.DefaultCurrency,
+			&m.Status, &m.SettlementConfig, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		merchants = append(merchants, m)
+	}
+	return merchants, nil
 }
 
 func (r *merchantRepo) CreateAPIKey(ctx context.Context, k *domain.APIKey) error {

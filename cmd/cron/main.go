@@ -11,8 +11,10 @@ import (
 	"zia/internal/connector/mpesa"
 	"zia/internal/connector/paystack"
 	"zia/internal/connector/pesalink"
+	"zia/internal/ledger"
 	"zia/internal/reconciliation"
 	"zia/internal/repository"
+	"zia/internal/settlement"
 	"zia/internal/telemetry"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -63,6 +65,10 @@ func main() {
 	defer pool.Close()
 
 	attRepo := repository.NewAttempt(pool)
+	merchantRepo := repository.NewMerchant(pool)
+	payoutRepo := repository.NewPayout(pool)
+	ledRepo := repository.NewLedger(pool)
+	ledgerEng := ledger.NewEngine(ledRepo)
 
 	registry := connector.NewRegistry()
 
@@ -87,10 +93,17 @@ func main() {
 
 	yesterday := time.Now().UTC().Add(-24 * time.Hour)
 	if err := recon.Reconcile(ctx, yesterday); err != nil {
-		logger.Fatal("reconciliation failed", zap.Error(err))
+		logger.Error("reconciliation failed", zap.Error(err))
+	} else {
+		logger.Info("reconciliation completed")
 	}
 
-	logger.Info("reconciliation completed")
+	settler := settlement.NewRunner(merchantRepo, payoutRepo, ledgerEng, registry, logger)
+	if err := settler.Settle(ctx, settlement.DefaultPolicy); err != nil {
+		logger.Fatal("settlement run failed", zap.Error(err))
+	}
+
+	logger.Info("settlement completed")
 }
 
 func getEnv(key, fallback string) string {

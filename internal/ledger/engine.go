@@ -209,6 +209,10 @@ func (e *Engine) PostPayoutReversal(ctx context.Context, merchantID, payoutID st
 	return e.postBalanced(ctx, entries)
 }
 
+func (e *Engine) Balance(ctx context.Context, accountID string) (int64, error) {
+	return e.repo.Balance(ctx, accountID)
+}
+
 func (e *Engine) postBalanced(ctx context.Context, entries []domain.LedgerEntry) error {
 	if err := validateBalanced(entries); err != nil {
 		return err
