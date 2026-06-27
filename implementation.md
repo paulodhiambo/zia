@@ -1,9 +1,10 @@
 # Zia — Implementation Architecture
 
 **Status:** Draft
-**Stack:** Go 1.26, chi, PostgreSQL, Redis, NATS JetStream
+**Stack:** Go 1.26, chi, PostgreSQL, Redis, NATS JetStream, OpenObserve
 **Modular monolith** — separate Go packages with clean interfaces; microservice-ready via strangler fig.
 **V1 rails:** M-Pesa (Daraja), KCB (Buni), Paystack, Pesalink. Stripe and PayPal are connector stubs deferred to P5+.
+**Observability:** OpenObserve — single binary for logs, metrics, traces, and dashboards via OTLP.
 
 ---
 
@@ -100,6 +101,10 @@
 │   │   └── service.go
 │   ├── merchant/             # Merchant + PSP account management
 │   │   └── service.go
+│   ├── telemetry/            # OpenTelemetry bootstrap (traces, metrics, logs)
+│   │   ├── setup.go          # provider init, shutdown
+│   │   ├── metrics.go        # all meter instruments declared here
+│   │   └── logger.go         # slog handler bridged to OTLP logs
 │   └── api/                  # HTTP handlers (chi router)
 │       ├── router.go         # Mount all routes
 │       ├── middleware.go     # Request ID, logging, recovery, auth
@@ -1160,7 +1165,225 @@ Every 50 min:
 
 ---
 
-## 13. Configuration
+## 13. Observability
+
+**Single backend: OpenObserve.** One service, one data store — handles logs, metrics, traces, and dashboards via OTLP. Replaces the Prometheus + Loki + Tempo + Grafana combination with a single Docker container.
+
+### 13.1 Running OpenObserve
+
+Add to `docker-compose.yml`:
+
+```yaml
+openobserve:
+  image: public.ecr.aws/zinclabs/openobserve:latest
+  ports:
+    - "5080:5080"
+  environment:
+    ZO_ROOT_USER_EMAIL: ${OO_EMAIL}
+    ZO_ROOT_USER_PASSWORD: ${OO_PASSWORD}
+    ZO_DATA_DIR: /data
+  volumes:
+    - openobserve_data:/data
+```
+
+UI at `http://localhost:5080`. Accepts OTLP/HTTP on the same port under `/api/<org>/v1/`. For production, run as a single container with a persistent volume (EBS, GCP disk, etc.) or use **OpenObserve Cloud** (`openobserve.ai`) which has a 200 GB/month free tier — no infra to run at all.
+
+### 13.2 OpenTelemetry Bootstrap
+
+All three signals go to OpenObserve over OTLP/HTTP with Basic auth. Wire this up at the top of each `cmd/*/main.go` before anything else starts.
+
+```go
+// internal/telemetry/setup.go
+func Setup(ctx context.Context, cfg Config) (shutdown func(context.Context) error, err error) {
+    auth := base64.StdEncoding.EncodeToString([]byte(cfg.Username + ":" + cfg.Password))
+    headers := map[string]string{"Authorization": "Basic " + auth}
+
+    res, _ := resource.New(ctx,
+        resource.WithAttributes(
+            semconv.ServiceName(cfg.ServiceName),
+            attribute.String("environment", cfg.Environment),
+        ),
+    )
+
+    // Traces
+    traceExp, _ := otlptracehttp.New(ctx,
+        otlptracehttp.WithEndpoint(cfg.Endpoint),
+        otlptracehttp.WithHeaders(headers),
+        otlptracehttp.WithURLPath("/api/default/v1/traces"),
+    )
+    tp := sdktrace.NewTracerProvider(
+        sdktrace.WithBatcher(traceExp),
+        sdktrace.WithResource(res),
+        sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.SampleRate))),
+    )
+    otel.SetTracerProvider(tp)
+
+    // Metrics
+    metricExp, _ := otlpmetrichttp.New(ctx,
+        otlpmetrichttp.WithEndpoint(cfg.Endpoint),
+        otlpmetrichttp.WithHeaders(headers),
+        otlpmetrichttp.WithURLPath("/api/default/v1/metrics"),
+    )
+    mp := sdkmetric.NewMeterProvider(
+        sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExp,
+            sdkmetric.WithInterval(15*time.Second))),
+        sdkmetric.WithResource(res),
+    )
+    otel.SetMeterProvider(mp)
+
+    // Logs
+    logExp, _ := otlploghttp.New(ctx,
+        otlploghttp.WithEndpoint(cfg.Endpoint),
+        otlploghttp.WithHeaders(headers),
+        otlploghttp.WithURLPath("/api/default/v1/logs"),
+    )
+    lp := sdklog.NewLoggerProvider(
+        sdklog.WithProcessor(sdklog.NewBatchProcessor(logExp)),
+        sdklog.WithResource(res),
+    )
+    global.SetLoggerProvider(lp)
+
+    return func(ctx context.Context) error {
+        return errors.Join(tp.Shutdown(ctx), mp.Shutdown(ctx), lp.Shutdown(ctx))
+    }, nil
+}
+
+// cmd/api/main.go — call at the top of main()
+shutdown, err := telemetry.Setup(ctx, cfg.Telemetry)
+if err != nil { log.Fatal(err) }
+defer shutdown(ctx)
+```
+
+### 13.3 Structured Logging
+
+Use `log/slog` with the OpenTelemetry bridge (`go.opentelemetry.io/contrib/bridges/otelslog`) so every log record is automatically correlated to the active trace span:
+
+```go
+// internal/telemetry/logger.go
+func NewLogger(name string) *slog.Logger {
+    return slog.New(otelslog.NewHandler(name))
+}
+```
+
+Instantiate one logger per package (`var log = telemetry.NewLogger("zia.orchestrator")`).
+
+**Rules for every log call:**
+
+```go
+// Always use InfoContext/WarnContext/ErrorContext so trace correlation is injected
+slog.InfoContext(ctx, "webhook processed",
+    "payment_intent_id", pi.ID,
+    "psp",               event.PSP,
+    "psp_reference",     event.PSPReference,
+    "merchant_id",       pi.MerchantID,
+    "transition",        string(from)+"→"+string(to),
+    "lag_ms",            time.Since(event.ReceivedAt).Milliseconds(),
+)
+```
+
+- `payment_intent_id`, `psp`, `merchant_id`, `psp_reference` must appear as structured fields in every log line that touches a payment — not embedded in the message string.
+- Gate raw PSP request/response bodies behind `slog.Debug` — never at `Info` in production.
+- Mask PII before any log call: `phoneutil.Mask("254712345678")` → `"25471****78"`.
+
+### 13.4 Metrics
+
+Declare all instruments once in `internal/telemetry/metrics.go`. Use low-cardinality attributes on metrics — `merchant_id` must not be a metric label (cardinality explosion); put it in log lines and trace attributes instead.
+
+```go
+// internal/telemetry/metrics.go
+var meter = otel.Meter("zia")
+
+var (
+    PaymentAttempts, _          = meter.Int64Counter("zia.payment.attempts")
+    PaymentSucceeded, _         = meter.Int64Counter("zia.payment.succeeded")
+    PaymentFailed, _            = meter.Int64Counter("zia.payment.failed")
+    ConnectorLatency, _         = meter.Float64Histogram("zia.connector.latency_seconds",
+                                      metric.WithUnit("s"))
+    WebhookLag, _               = meter.Float64Histogram("zia.webhook.processing_lag_seconds",
+                                      metric.WithUnit("s"))
+    LedgerImbalances, _         = meter.Int64Counter("zia.ledger.imbalances")
+    TokenRefreshFailures, _     = meter.Int64Counter("zia.token_refresh.failures")
+    ReconciliationExceptions, _ = meter.Int64Counter("zia.reconciliation.exceptions")
+    CircuitBreakerOpen, _       = meter.Int64ObservableGauge("zia.circuit_breaker.open")
+    DLQDepth, _                 = meter.Int64ObservableGauge("zia.dlq.depth")
+    PesalinkRecipientCacheHits, _ = meter.Int64Counter("zia.pesalink.recipient_cache_hits")
+)
+```
+
+Standard attributes to attach on every record:
+
+```go
+attrs := metric.WithAttributes(
+    attribute.String("psp",    "mpesa"),
+    attribute.String("method", "mpesa_stk"),
+    attribute.String("env",    cfg.Environment),
+)
+telemetry.PaymentAttempts.Add(ctx, 1, attrs)
+```
+
+### 13.5 Traces
+
+One root span per `PaymentIntent`. Propagate context through NATS message headers so the async webhook processing span links to the original API call as one logical trace.
+
+```go
+// Publishing to NATS — inject current trace context into headers
+msg := &nats.Msg{Subject: "zia.webhook.received", Data: body}
+msg.Header = make(nats.Header)
+otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(msg.Header))
+js.PublishMsg(msg)
+
+// Consuming from NATS — extract and continue the trace
+ctx = otel.GetTextMapPropagator().Extract(context.Background(),
+    propagation.HeaderCarrier(msg.Header))
+ctx, span := otel.Tracer("zia.worker").Start(ctx, "webhook.Process")
+defer span.End()
+```
+
+Key spans and attributes:
+
+| Span | Key attributes |
+|---|---|
+| `orchestrator.CreatePaymentIntent` | `payment_intent_id`, `merchant_id`, `psp`, `amount_minor`, `currency` |
+| `routing.Route` | `psp`, `fallbacks`, `reason` |
+| `connector.InitiateCollection` | `psp`, `method`, `psp_reference` |
+| `ledger.PostEntries` | `entry_count`, `reference_type` |
+| `webhook.Process` | `psp`, `dedup_key`, `lag_ms`, `transition` |
+| `settlement.Run` | `merchant_id`, `currency`, `amount_minor`, `rail` |
+
+Set `span.RecordError(err)` and `span.SetStatus(codes.Error, err.Error())` on all error paths — OpenObserve's trace UI will surface these automatically.
+
+### 13.6 Alerts
+
+OpenObserve supports scheduled SQL queries as alert rules. Configure in the UI under **Alerts → Alert Rules**:
+
+| Alert | Condition | Severity | Destination |
+|---|---|---|---|
+| Ledger imbalance | `SELECT count(*) FROM metrics WHERE metric_name='zia_ledger_imbalances' AND value > 0` | **P1 — page** | Slack `#zia-incidents` |
+| Connector auth failure | `zia_token_refresh_failures > 0` in last 5 min | **P1** | Slack |
+| Circuit breaker open | `zia_circuit_breaker_open{psp=*} == 1` for > 2 min | P2 | Slack |
+| DLQ depth growing | `zia_dlq_depth > 0` for > 10 min | P2 | Slack |
+| Webhook lag high | `p95(zia_webhook_processing_lag_seconds) > 30` | P2 | Slack |
+| Reconciliation exceptions | `zia_reconciliation_exceptions > 5` in 24 h | P3 | Slack |
+
+Use OpenObserve's **Alert Destinations** to post to a Slack webhook URL — no PagerDuty needed at this stage.
+
+**Alert threshold note:** Webhook lag and connector latency thresholds must be set per PSP, not as system-wide values. M-Pesa STK confirmation takes 30–90 s by design; a 10 s threshold that's appropriate for Paystack card would fire constantly for M-Pesa.
+
+### 13.7 Dashboards
+
+Build in OpenObserve's **Dashboards** UI using its built-in SQL/PromQL query editor against the ingested metrics stream.
+
+Priority order to build:
+
+1. **Payment Funnel** — `created → requires_action → succeeded / failed` counts per PSP and method. This single view tells you immediately if one rail broke.
+2. **PSP Health** — success rate, connector latency P50/P95/P99, circuit breaker state per PSP.
+3. **Webhook Pipeline** — received vs processed count, lag histogram, DLQ depth.
+4. **Ledger** — posting rate and running balance per account (confirm `platform:fees` accrues and `merchant:in_transit` drains after each settlement run).
+5. **Cron Health** — last successful run time per job (reconciliation, settlement, token refresh). A job that stopped running is invisible without this.
+
+---
+
+## 14. Configuration
 
 ```go
 // loaded from env vars at startup — no config file in production
@@ -1181,7 +1404,20 @@ type Config struct {
     // Stripe stripe.Config
     // PayPal paypal.Config
 
-    RiskRules risk.Config
+    RiskRules   risk.Config
+    Telemetry   telemetry.Config
+}
+```
+
+```go
+// internal/telemetry/setup.go
+type Config struct {
+    Endpoint    string  // OpenObserve OTLP base URL, e.g. http://localhost:5080
+    Username    string  // OpenObserve login email
+    Password    string
+    ServiceName string  // "zia-api" | "zia-worker" | "zia-cron"
+    Environment string  // "production" | "staging" | "development"
+    SampleRate  float64 // 0.0–1.0; use 1.0 in dev, 0.1 in prod
 }
 ```
 
@@ -1194,6 +1430,14 @@ DATABASE_URL=postgres://zia:zia@localhost:5432/zia?sslmode=disable
 REDIS_URL=redis://localhost:6379/0
 NATS_URL=nats://localhost:4222
 HMAC_SIGNING_SECRET=
+
+# Observability (OpenObserve)
+OO_ENDPOINT=http://localhost:5080        # change to https://api.openobserve.ai for cloud
+OO_EMAIL=admin@zia.dev
+OO_PASSWORD=
+OO_SERVICE_NAME=zia-api                  # override per binary: zia-worker, zia-cron
+OO_ENVIRONMENT=development
+OO_SAMPLE_RATE=1.0                       # set to 0.1 in production
 
 # M-Pesa (Daraja)
 MPESA_CONSUMER_KEY=
@@ -1225,7 +1469,7 @@ PESALINK_BASE_URL=https://api.transferwise.com
 
 ---
 
-## 14. Database Migrations (Outline)
+## 15. Database Migrations (Outline)
 
 ### 000001_init.up.sql
 
@@ -1375,7 +1619,7 @@ CREATE TABLE pesalink_recipients (
 
 ---
 
-## 15. Testing Strategy
+## 16. Testing Strategy
 
 | Layer | What | How |
 |---|---|---|
@@ -1402,11 +1646,11 @@ CREATE TABLE pesalink_recipients (
 
 ---
 
-## 16. Implementation Sequence
+## 17. Implementation Sequence
 
 | Phase | Packages | Milestone |
 |---|---|---|
-| **P0 — Skeleton** | `cmd/api`, `internal/domain`, `internal/repository`, `internal/api`, `migrations` | Empty server boots, health check returns 200, migrations run cleanly |
+| **P0 — Skeleton** | `cmd/api`, `internal/domain`, `internal/repository`, `internal/api`, `internal/telemetry`, `migrations` | Empty server boots, health check returns 200, migrations run cleanly, OpenObserve receiving traces and logs |
 | **P1 — Core Flow** | `internal/connector` (interface + registry), `internal/orchestrator`, `internal/routing`, `internal/idempotency`, `internal/risk`, `pkg/phoneutil` | Create PI → route → simulate connector → state machine works; phone normalisation shared |
 | **P2 — Ledger** | `internal/ledger`, `internal/repository/ledger.go` | Ledger entries posted on terminal PI transitions; invariant tests pass; V1 account hierarchy seeded |
 | **P3 — Webhooks** | `internal/webhook`, `internal/repository/webhookevent.go`, `cmd/worker` | Webhook ingestion → dedup → persist → event bus consumer processes event; ack-fast-process-async confirmed |
@@ -1422,7 +1666,7 @@ CREATE TABLE pesalink_recipients (
 
 ---
 
-## 17. PSP-Specific Production Go-Live Checklist
+## 18. PSP-Specific Production Go-Live Checklist
 
 ### M-Pesa (Daraja)
 - [ ] STK Push Go-Live approved by Safaricom
