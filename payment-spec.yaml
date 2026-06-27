@@ -1,0 +1,885 @@
+openapi: 3.0.3
+
+info:
+  title: Zia Payment API
+  version: "1.0.0"
+  description: |
+    The Zia Payment API lets merchants create, confirm, and refund payments across
+    M-Pesa, KCB, PayPal, Paystack, and Stripe, and create checkout sessions for the
+    upcoming embeddable widget. Pesalink is used internally for settlement/payout and is
+    not exposed as a customer-facing collection method (see ARCHITECTURE.md).
+
+    ## Envelope convention
+
+    Every request and response body (except inbound PSP webhooks — see the
+    `/v1/webhooks/{psp}` operation) is wrapped in a standard envelope:
+
+    **Request envelope**
+    | Field | Required | Description |
+    |---|---|---|
+    | `messageID` | yes | Client-generated unique string identifying this exact request. Also doubles as the **idempotency key**: replaying the same `messageID` with an identical `primaryData` payload returns the original cached result; replaying it with a *different* payload returns a `409` conflict (`statusCode` `1004`). A UUIDv4 is recommended over short random strings to avoid collisions. |
+    | `conversationID` | no | Optional correlator for a multi-call flow (e.g. create → confirm → refund on the same payment). If omitted on the first call of a flow, Zia generates one and returns it; pass it on subsequent related calls. |
+    | `primaryData` | yes | The operation-specific payload. Schema varies per endpoint — see each operation below. |
+    | `additionalData` | no | Array of `{key, value}` string pairs for forward-compatible extension fields not yet promoted into a typed schema (e.g. device fingerprint, channel). Never used for fields that already have a typed home in `primaryData`. |
+
+    **Response envelope**
+    | Field | Description |
+    |---|---|
+    | `statusCode` | Fine-grained business status. `"0"` = success. Non-zero = a specific business error (see table below). |
+    | `statusDescription` | Human-readable description of `statusCode`. |
+    | `messageCode` | Mirrors the HTTP status of the response, as a string (e.g. `"200"`, `"422"`), so envelope-only consumers and HTTP-aware tooling agree. |
+    | `messageDescription` | Human-readable description of `messageCode`. |
+    | `errorInfo` | `null` on success. Populated with structured error detail on failure. |
+    | `messageID` | Echo of the request's `messageID`. |
+    | `conversationID` | Echo or server-generated correlator (see above). |
+    | `additionalData` | Echo/extension data, same shape as the request. |
+    | `primaryData` | The operation-specific result. `null` on most error responses. |
+
+    ## Status code reference
+
+    | HTTP / `messageCode` | `statusCode` | Meaning |
+    |---|---|---|
+    | 200 | 0 | Success |
+    | 400 | 1001 | Validation error — malformed or missing `primaryData` fields |
+    | 401 | 1002 | Authentication failed — invalid/missing bearer token or request signature |
+    | 404 | 1003 | Resource not found |
+    | 409 | 1004 | Idempotency conflict — `messageID` reused with a different payload |
+    | 422 | 1005 | Business rule violation (e.g. refund exceeds refundable amount, unsupported currency for method) |
+    | 429 | 1006 | Rate limit exceeded |
+    | 500 | 1007 | Internal error |
+    | 503 | 1008 | Upstream PSP temporarily unavailable — routing/failover may apply automatically |
+
+    > **Design note:** this spec keeps real HTTP status codes meaningful (a `422` is
+    > transported as HTTP 422, not HTTP 200 with a buried error) so standard HTTP
+    > tooling, gateways, and monitoring keep working. If your integration's gateway
+    > requires every response to transport as HTTP 200 regardless of outcome, that's a
+    > one-line change to the `responses` blocks below — flag it and this spec can be
+    > adjusted.
+
+    > **Naming note:** earlier project docs (`README.md`, `ARCHITECTURE.md`) used
+    > snake_case field names (e.g. `amount_minor`). This spec uses camelCase
+    > (`amountMinor`) to match the casing of the envelope itself (`messageID`,
+    > `primaryData`). Pick one convention and apply it consistently across backend,
+    > this spec, and the frontend types in `MERCHANT_PORTAL_ARCHITECTURE.md` before
+    > implementation starts.
+
+  contact:
+    name: Zia Engineering
+
+servers:
+  - url: https://api.Zia.dev
+    description: Live
+  - url: https://sandbox-api.Zia.dev
+    description: Sandbox
+
+tags:
+  - name: Payment Intents
+    description: Create, confirm, query, and refund payments.
+  - name: Checkout Sessions
+    description: Widget/checkout-facing session resource (forward-looking, see MERCHANT_PORTAL_ARCHITECTURE.md and ARCHITECTURE.md §13.2).
+  - name: Webhooks
+    description: Inbound PSP callbacks. Not enveloped — see operation notes.
+
+security:
+  - BearerAuth: []
+    SignatureAuth: []
+
+paths:
+
+  /v1/payment_intents:
+    post:
+      tags: [Payment Intents]
+      summary: Create a payment intent
+      description: |
+        Starts a collection. For async methods (`mpesa_stk`, `kcb_stk`) this triggers
+        the customer-facing prompt and returns `requires_action` immediately; the
+        terminal outcome arrives via your configured outbound webhook or by polling
+        `GET /v1/payment_intents/{id}`. For `paypal_redirect`, `nextAction` in the
+        response carries the URL to redirect the customer to.
+      operationId: createPaymentIntent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequestEnvelope_CreatePaymentIntent'
+            examples:
+              mpesaStk:
+                summary: M-Pesa STK push
+                value:
+                  messageID: "8f14e45f-ceea-167a-a626-01234567890a"
+                  primaryData:
+                    amountMinor: 50000
+                    currency: KES
+                    method: mpesa_stk
+                    customerPhone: "254712345678"
+                    customerRef: "order_8841"
+                  additionalData: []
+      responses:
+        '200':
+          description: Payment intent created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseEnvelope_PaymentIntent'
+              examples:
+                requiresAction:
+                  summary: STK push sent, awaiting customer PIN entry
+                  value:
+                    statusCode: "0"
+                    statusDescription: Success
+                    messageCode: "200"
+                    messageDescription: Processed successfully
+                    errorInfo: null
+                    messageID: "8f14e45f-ceea-167a-a626-01234567890a"
+                    conversationID: "conv_01J5ZK"
+                    additionalData: []
+                    primaryData:
+                      id: "pi_01HZX0000000000000000001"
+                      merchantId: "mch_01H0000000000000000001"
+                      amountMinor: 50000
+                      currency: KES
+                      status: requires_action
+                      method: mpesa_stk
+                      customerPhone: "254712345678"
+                      customerRef: "order_8841"
+                      nextAction: null
+                      createdAt: "2026-06-27T09:00:00Z"
+                      updatedAt: "2026-06-27T09:00:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/IdempotencyConflict'
+        '422':
+          $ref: '#/components/responses/BusinessRuleViolation'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/payment_intents/{id}:
+    get:
+      tags: [Payment Intents]
+      summary: Retrieve a payment intent
+      description: |
+        Read-only status check. GET requests carry no request envelope/body (per
+        HTTP semantics) — only the resource `id` and standard auth headers. The
+        response is still wrapped in the standard response envelope for consistency
+        with every other operation.
+      operationId: getPaymentIntent
+      parameters:
+        - $ref: '#/components/parameters/PaymentIntentId'
+      responses:
+        '200':
+          description: Payment intent found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseEnvelope_PaymentIntent'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/payment_intents/{id}/confirm:
+    post:
+      tags: [Payment Intents]
+      summary: Confirm a payment intent
+      description: |
+        Required for flows where the customer takes an out-of-band action your
+        backend must acknowledge server-side — for example, after a customer
+        approves a PayPal order via redirect, call this with the PayPal order ID so
+        Zia can capture it. Not required for STK-style methods, which confirm
+        automatically via webhook.
+      operationId: confirmPaymentIntent
+      parameters:
+        - $ref: '#/components/parameters/PaymentIntentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequestEnvelope_ConfirmPaymentIntent'
+            examples:
+              paypalApproved:
+                summary: Confirm after PayPal redirect approval
+                value:
+                  messageID: "3b9e2a10-6f1d-4e2a-9c3a-aaaaaaaaaaaa"
+                  conversationID: "conv_01J5ZK"
+                  primaryData:
+                    providerPayload:
+                      orderId: "5O190127TN364715T"
+                  additionalData: []
+      responses:
+        '200':
+          description: Payment intent confirmed/captured.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseEnvelope_PaymentIntent'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/IdempotencyConflict'
+        '422':
+          $ref: '#/components/responses/BusinessRuleViolation'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/payment_intents/{id}/refunds:
+    post:
+      tags: [Payment Intents]
+      summary: Refund a payment intent
+      description: |
+        Issues a full or partial refund. Omit `amountMinor` in `primaryData` for a
+        full refund of the remaining refundable balance. Routed to the connector
+        appropriate for how the original payment was collected (M-Pesa/KCB B2C for
+        mobile-money originated payments, the originating card/wallet PSP for
+        card/PayPal payments) — see ARCHITECTURE.md §9.2.
+      operationId: refundPaymentIntent
+      parameters:
+        - $ref: '#/components/parameters/PaymentIntentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequestEnvelope_Refund'
+            examples:
+              fullRefund:
+                summary: Full refund
+                value:
+                  messageID: "c1a2b3d4-0000-4444-8888-aaaabbbbcccc"
+                  conversationID: "conv_01J5ZK"
+                  primaryData:
+                    reason: "Customer requested cancellation"
+                  additionalData: []
+              partialRefund:
+                summary: Partial refund
+                value:
+                  messageID: "d2b3c4e5-1111-5555-9999-bbbbccccdddd"
+                  conversationID: "conv_01J5ZK"
+                  primaryData:
+                    amountMinor: 20000
+                    reason: "Partial goods returned"
+                  additionalData: []
+      responses:
+        '200':
+          description: Refund accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseEnvelope_Refund'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/IdempotencyConflict'
+        '422':
+          $ref: '#/components/responses/BusinessRuleViolation'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/checkout_sessions:
+    post:
+      tags: [Checkout Sessions]
+      summary: Create a checkout session
+      description: |
+        Creates a short-lived, single-use public token for an existing payment
+        intent. Intended for the future embeddable widget — see
+        ARCHITECTURE.md §13.2 and MERCHANT_PORTAL_ARCHITECTURE.md.
+      operationId: createCheckoutSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequestEnvelope_CreateCheckoutSession'
+            examples:
+              default:
+                value:
+                  messageID: "e3c4d5f6-2222-6666-aaaa-ccccddddeeee"
+                  primaryData:
+                    paymentIntentId: "pi_01HZX0000000000000000001"
+                  additionalData: []
+      responses:
+        '200':
+          description: Checkout session created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseEnvelope_CheckoutSession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/checkout_sessions/{token}:
+    get:
+      tags: [Checkout Sessions]
+      summary: Retrieve a checkout session (public, token-scoped)
+      description: |
+        Unauthenticated except for the token itself — intended to be called directly
+        from the customer's browser by the embeddable widget. Rate-limited per
+        token/IP. Does not require `Authorization`/`SignatureAuth`.
+      operationId: getCheckoutSession
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "cs_pub_01J5ZK0000000000000000001"
+      responses:
+        '200':
+          description: Checkout session found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseEnvelope_CheckoutSessionPublicView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          description: Session expired or already used.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseEnvelope_Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/webhooks/{psp}:
+    post:
+      tags: [Webhooks]
+      summary: Inbound PSP webhook (NOT enveloped)
+      description: |
+        Receives asynchronous callbacks directly from each PSP in that PSP's own
+        native payload shape (Daraja callback JSON, KCB IPN, Stripe event object,
+        Paystack event, PayPal webhook event). **This endpoint intentionally does
+        not use the Zia request/response envelope**, since the payload format is
+        owned by the PSP, not by Zia. Authenticity is verified per-PSP via
+        signature header (`Stripe-Signature`, `x-paystack-signature`, PayPal's
+        transmission-signature API) or shared-secret/IP-allowlist for M-Pesa/KCB —
+        see ARCHITECTURE.md §8. Always acknowledge with `200 OK` quickly; processing
+        happens asynchronously off the event bus.
+      operationId: receivePspWebhook
+      security: []
+      parameters:
+        - name: psp
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [mpesa, kcb, paypal, paystack, stripe]
+          example: mpesa
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Native PSP payload — shape varies by provider, not defined by this spec.
+      responses:
+        '200':
+          description: Acknowledged. Body is intentionally minimal/PSP-expected, not the Zia envelope.
+        '401':
+          description: Signature verification failed.
+
+components:
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Merchant secret key (`sandbox` or `live`, matching the credential's mode).
+    SignatureAuth:
+      type: apiKey
+      in: header
+      name: X-Zia-Signature
+      description: HMAC-SHA256 signature over `timestamp + nonce + body`, required on all mutating requests. See ARCHITECTURE.md §10 and README.md "Authentication & Signing".
+
+  parameters:
+    PaymentIntentId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      example: "pi_01HZX0000000000000000001"
+
+  responses:
+    BadRequest:
+      description: Validation error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ResponseEnvelope_Error'
+          example:
+            statusCode: "1001"
+            statusDescription: Validation error
+            messageCode: "400"
+            messageDescription: One or more fields failed validation
+            errorInfo:
+              errorCode: "1001"
+              errorMessage: "amountMinor must be a positive integer"
+              fieldErrors:
+                - field: primaryData.amountMinor
+                  message: must be greater than 0
+            messageID: "8f14e45f-ceea-167a-a626-01234567890a"
+            conversationID: null
+            additionalData: []
+            primaryData: null
+    Unauthorized:
+      description: Authentication or signature verification failed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ResponseEnvelope_Error'
+          example:
+            statusCode: "1002"
+            statusDescription: Authentication failed
+            messageCode: "401"
+            messageDescription: Invalid or missing credentials
+            errorInfo:
+              errorCode: "1002"
+              errorMessage: "Invalid signature"
+            messageID: "8f14e45f-ceea-167a-a626-01234567890a"
+            conversationID: null
+            additionalData: []
+            primaryData: null
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ResponseEnvelope_Error'
+          example:
+            statusCode: "1003"
+            statusDescription: Resource not found
+            messageCode: "404"
+            messageDescription: No matching resource
+            errorInfo:
+              errorCode: "1003"
+              errorMessage: "No payment intent found for the given id"
+            messageID: "8f14e45f-ceea-167a-a626-01234567890a"
+            conversationID: null
+            additionalData: []
+            primaryData: null
+    IdempotencyConflict:
+      description: The same `messageID` was used with a different `primaryData` payload.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ResponseEnvelope_Error'
+          example:
+            statusCode: "1004"
+            statusDescription: Idempotency conflict
+            messageCode: "409"
+            messageDescription: messageID already used with a different payload
+            errorInfo:
+              errorCode: "1004"
+              errorMessage: "messageID 8f14e45f-... was already used with a different request body"
+            messageID: "8f14e45f-ceea-167a-a626-01234567890a"
+            conversationID: null
+            additionalData: []
+            primaryData: null
+    BusinessRuleViolation:
+      description: Request is well-formed but violates a business rule.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ResponseEnvelope_Error'
+          example:
+            statusCode: "1005"
+            statusDescription: Business rule violation
+            messageCode: "422"
+            messageDescription: Request could not be processed
+            errorInfo:
+              errorCode: "1005"
+              errorMessage: "Refund amount exceeds the remaining refundable balance"
+            messageID: "8f14e45f-ceea-167a-a626-01234567890a"
+            conversationID: null
+            additionalData: []
+            primaryData: null
+    InternalError:
+      description: Internal or upstream PSP error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ResponseEnvelope_Error'
+          example:
+            statusCode: "1007"
+            statusDescription: Internal error
+            messageCode: "500"
+            messageDescription: Something went wrong processing this request
+            errorInfo:
+              errorCode: "1007"
+              errorMessage: "Unexpected error — contact support with this messageID"
+            messageID: "8f14e45f-ceea-167a-a626-01234567890a"
+            conversationID: null
+            additionalData: []
+            primaryData: null
+
+  schemas:
+
+    # ---- Envelope primitives ----
+
+    KeyValuePair:
+      type: object
+      required: [key, value]
+      properties:
+        key:
+          type: string
+        value:
+          type: string
+
+    ErrorInfo:
+      type: object
+      nullable: true
+      properties:
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        fieldErrors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+
+    RequestEnvelope:
+      type: object
+      required: [messageID, primaryData]
+      properties:
+        messageID:
+          type: string
+          description: Client-generated unique request identifier; also the idempotency key.
+          example: "8f14e45f-ceea-167a-a626-01234567890a"
+        conversationID:
+          type: string
+          nullable: true
+          description: Optional correlator linking related calls in one logical flow.
+          example: "conv_01J5ZK"
+        primaryData:
+          type: object
+          description: Operation-specific payload. Overridden per-operation below.
+        additionalData:
+          type: array
+          items:
+            $ref: '#/components/schemas/KeyValuePair'
+
+    ResponseEnvelope:
+      type: object
+      required: [statusCode, statusDescription, messageCode, messageDescription, messageID, primaryData]
+      properties:
+        statusCode:
+          type: string
+          example: "0"
+        statusDescription:
+          type: string
+          example: Success
+        messageCode:
+          type: string
+          example: "200"
+        messageDescription:
+          type: string
+          example: Processed successfully
+        errorInfo:
+          $ref: '#/components/schemas/ErrorInfo'
+        messageID:
+          type: string
+          example: "8f14e45f-ceea-167a-a626-01234567890a"
+        conversationID:
+          type: string
+          nullable: true
+          example: "conv_01J5ZK"
+        additionalData:
+          type: array
+          items:
+            $ref: '#/components/schemas/KeyValuePair'
+        primaryData:
+          type: object
+          description: Operation-specific result. Overridden per-operation below.
+
+    ResponseEnvelope_Error:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - type: object
+          properties:
+            primaryData:
+              type: object
+              nullable: true
+
+    # ---- Domain objects ----
+
+    PaymentMethod:
+      type: string
+      enum: [mpesa_stk, kcb_stk, card, paypal_redirect]
+
+    PaymentIntentStatus:
+      type: string
+      enum:
+        - created
+        - requires_action
+        - processing
+        - succeeded
+        - failed
+        - expired
+        - partially_refunded
+        - refunded
+
+    NextAction:
+      type: object
+      nullable: true
+      properties:
+        type:
+          type: string
+          enum: [redirect, display_qr, poll]
+        url:
+          type: string
+          nullable: true
+
+    PaymentIntent:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "pi_01HZX0000000000000000001"
+        merchantId:
+          type: string
+          example: "mch_01H0000000000000000001"
+        amountMinor:
+          type: integer
+          format: int64
+          description: Amount in the smallest unit of `currency` (e.g. cents).
+          example: 50000
+        currency:
+          type: string
+          description: ISO 4217 currency code.
+          example: KES
+        status:
+          $ref: '#/components/schemas/PaymentIntentStatus'
+        method:
+          $ref: '#/components/schemas/PaymentMethod'
+        customerPhone:
+          type: string
+          nullable: true
+          example: "254712345678"
+        customerEmail:
+          type: string
+          nullable: true
+        customerRef:
+          type: string
+          nullable: true
+          example: "order_8841"
+        nextAction:
+          $ref: '#/components/schemas/NextAction'
+        metadata:
+          type: object
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    RefundStatus:
+      type: string
+      enum: [pending, succeeded, failed]
+
+    Refund:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "rf_01HZX0000000000000000099"
+        paymentIntentId:
+          type: string
+          example: "pi_01HZX0000000000000000001"
+        amountMinor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        status:
+          $ref: '#/components/schemas/RefundStatus'
+        reason:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    CheckoutSession:
+      type: object
+      properties:
+        publicToken:
+          type: string
+          example: "cs_pub_01J5ZK0000000000000000001"
+        paymentIntentId:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+
+    CheckoutSessionPublicView:
+      type: object
+      properties:
+        paymentIntentId:
+          type: string
+        amountMinor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        allowedMethods:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentMethod'
+        merchantName:
+          type: string
+          example: "Acme Ltd"
+        status:
+          $ref: '#/components/schemas/PaymentIntentStatus'
+        expiresAt:
+          type: string
+          format: date-time
+
+    # ---- Per-operation request payloads (primaryData) ----
+
+    CreatePaymentIntentPayload:
+      type: object
+      required: [amountMinor, currency, method]
+      properties:
+        amountMinor:
+          type: integer
+          format: int64
+          minimum: 1
+        currency:
+          type: string
+          example: KES
+        method:
+          $ref: '#/components/schemas/PaymentMethod'
+        customerPhone:
+          type: string
+          description: Required for `mpesa_stk` and `kcb_stk`. E.164-style, e.g. 254712345678.
+        customerEmail:
+          type: string
+          description: Required for `card` and `paypal_redirect`.
+        customerRef:
+          type: string
+          description: Merchant's own order/reference identifier.
+        metadata:
+          type: object
+
+    ConfirmPaymentIntentPayload:
+      type: object
+      properties:
+        providerPayload:
+          type: object
+          description: 'Provider-specific confirmation data, e.g. `{ "orderId": "..." }` for PayPal.'
+
+    RefundPayload:
+      type: object
+      properties:
+        amountMinor:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Omit for a full refund of the remaining refundable balance.
+        reason:
+          type: string
+
+    CreateCheckoutSessionPayload:
+      type: object
+      required: [paymentIntentId]
+      properties:
+        paymentIntentId:
+          type: string
+
+    # ---- Composed request envelopes ----
+
+    RequestEnvelope_CreatePaymentIntent:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - type: object
+          properties:
+            primaryData:
+              $ref: '#/components/schemas/CreatePaymentIntentPayload'
+
+    RequestEnvelope_ConfirmPaymentIntent:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - type: object
+          properties:
+            primaryData:
+              $ref: '#/components/schemas/ConfirmPaymentIntentPayload'
+
+    RequestEnvelope_Refund:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - type: object
+          properties:
+            primaryData:
+              $ref: '#/components/schemas/RefundPayload'
+
+    RequestEnvelope_CreateCheckoutSession:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - type: object
+          properties:
+            primaryData:
+              $ref: '#/components/schemas/CreateCheckoutSessionPayload'
+
+    # ---- Composed response envelopes ----
+
+    ResponseEnvelope_PaymentIntent:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - type: object
+          properties:
+            primaryData:
+              $ref: '#/components/schemas/PaymentIntent'
+
+    ResponseEnvelope_Refund:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - type: object
+          properties:
+            primaryData:
+              $ref: '#/components/schemas/Refund'
+
+    ResponseEnvelope_CheckoutSession:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - type: object
+          properties:
+            primaryData:
+              $ref: '#/components/schemas/CheckoutSession'
+
+    ResponseEnvelope_CheckoutSessionPublicView:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - type: object
+          properties:
+            primaryData:
+              $ref: '#/components/schemas/CheckoutSessionPublicView'
