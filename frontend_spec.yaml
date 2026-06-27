@@ -1,0 +1,1538 @@
+openapi: 3.0.3
+info:
+  title: Zia Institutional Portal API
+  description: >-
+    Production-ready API specification for the Zia Treasury, Payments, and Developer Portal. 
+    All requests and responses between the frontend client and the backend ledger services 
+    are strictly wrapped in standard enterprise message envelopes. This ensures metadata 
+    tracking, audit trails, and correlation IDs are preserved across every network hop.
+  version: 1.0.0
+servers:
+  - url: /api/v1
+    description: Production Sandbox Server
+  - url: http://localhost:3000/api/v1
+    description: Local Development Server
+security:
+  - BearerAuth: []
+paths:
+  /auth/login:
+    post:
+      summary: User Sign In
+      description: Authenticate Elena Mendes or other teammates to retrieve a session token and profile data.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequestEnvelope'
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponseEnvelope'
+        '400':
+          description: Invalid request parameters or validation failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseEnvelope'
+        '401':
+          description: Unauthorized - Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseEnvelope'
+
+  /auth/signup:
+    post:
+      summary: Open Zia Workspace (Sign Up)
+      description: Register a legal business entity, default owner profile, and provision initial sandbox keys.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignupRequestEnvelope'
+      responses:
+        '200':
+          description: Workspace successfully created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponseEnvelope'
+        '400':
+          description: Workspace registration validation failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseEnvelope'
+
+  /auth/forgot-password:
+    post:
+      summary: Request Password Reset
+      description: Dispatches a cryptographically secure, short-lived reset link to the work email.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForgotPasswordRequestEnvelope'
+      responses:
+        '200':
+          description: Reset link successfully dispatched (always returns success status to prevent user enumeration)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponseEnvelope'
+
+  /dashboard/overview:
+    get:
+      summary: Get Treasury Overview Statistics
+      description: Fetch real-time volume, transaction count, pending payouts, checklist items, and operating account balances.
+      responses:
+        '200':
+          description: Overview data retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardOverviewResponseEnvelope'
+        '401':
+          description: Unauthorized session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseEnvelope'
+
+  /transactions:
+    get:
+      summary: List Transactions Ledger
+      description: Query the transaction registry. Supports paginated results, string search, and status category filters.
+      parameters:
+        - name: search
+          in: query
+          description: Search term matches ID, counterparty, amount, or invoice reference
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: Filter transactions by specific state
+          required: false
+          schema:
+            type: string
+            enum: [All, Succeeded, Pending, Refunded, Disputed]
+        - name: limit
+          in: query
+          description: Maximum rows returned
+          required: false
+          schema:
+            type: integer
+            default: 10
+        - name: offset
+          in: query
+          description: Pagination offset
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Transaction history retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionListResponseEnvelope'
+
+  /payouts:
+    get:
+      summary: List Payouts
+      description: Query scheduled, pending, and past treasury payouts.
+      parameters:
+        - name: search
+          in: query
+          description: Search by payout ID, recipient bank, or routing details
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: Filter payouts by state
+          required: false
+          schema:
+            type: string
+            enum: [All, Succeeded, Pending, Failed]
+      responses:
+        '200':
+          description: Payout register retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayoutListResponseEnvelope'
+
+  /payouts/create:
+    post:
+      summary: Initiate Treasury Payout
+      description: Schedule a transfer from a local Operating/Reserves balance to an external bank routing structure.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePayoutRequestEnvelope'
+      responses:
+        '200':
+          description: Payout transfer scheduled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatePayoutResponseEnvelope'
+        '400':
+          description: Invalid banking routing numbers or insufficient balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseEnvelope'
+
+  /customers:
+    get:
+      summary: List Customers
+      description: Retrieve the customer directory. Supports filters to isolate active/inactive client accounts.
+      parameters:
+        - name: search
+          in: query
+          description: Search matches name, company, email, or customer ID
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: Filter customers by state
+          required: false
+          schema:
+            type: string
+            enum: [All, Active, Inactive]
+      responses:
+        '200':
+          description: Customers list retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerListResponseEnvelope'
+
+  /customers/create:
+    post:
+      summary: Create Customer Account
+      description: Register a customer entity to authorize charges or track individual volumes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCustomerRequestEnvelope'
+      responses:
+        '200':
+          description: Customer workspace established
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateCustomerResponseEnvelope'
+        '400':
+          description: Duplicate customer details or invalid formatting
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseEnvelope'
+
+  /customers/{id}:
+    get:
+      summary: Fetch Customer Profile
+      description: Retrieve profile, payment methods, and parsed processed aggregates for a single customer ID.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "cus_8K2X1B"
+      responses:
+        '200':
+          description: Customer profile loaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateCustomerResponseEnvelope'
+        '404':
+          description: Customer not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseEnvelope'
+
+  /customers/{id}/charges:
+    get:
+      summary: Customer Charges Registry
+      description: Retrieve recent charge attempts, disputes, or refunds specific to one customer ID.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "cus_8K2X1B"
+      responses:
+        '200':
+          description: Charges list retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerChargesResponseEnvelope'
+        '404':
+          description: Customer not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseEnvelope'
+
+  /team/members:
+    get:
+      summary: Get Team Directory
+      description: Retrieve details on active team members and access tiers.
+      responses:
+        '200':
+          description: Members list retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberListResponseEnvelope'
+
+  /team/invitations:
+    get:
+      summary: List Workspace Invites
+      description: Retrieve active invitations waiting for acceptance.
+      responses:
+        '200':
+          description: Pending invites retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingInviteListResponseEnvelope'
+
+  /team/invite:
+    post:
+      summary: Dispatch Team Invitation
+      description: Issues a workspace invitation link with targeted role scopes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InviteMemberRequestEnvelope'
+      responses:
+        '200':
+          description: Invitation sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteMemberResponseEnvelope'
+        '400':
+          description: Email matches an existing active member or pending invite
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseEnvelope'
+
+  /team/invitations/{email}/resend:
+    post:
+      summary: Resend Workspace Invitation
+      description: Re-routes the invitation link to the target email.
+      parameters:
+        - name: email
+          in: path
+          required: true
+          schema:
+            type: string
+            format: email
+            example: "marc@acme.com"
+      responses:
+        '200':
+          description: Invitation resent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponseEnvelope'
+        '404':
+          description: No active invitation matches the email address
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseEnvelope'
+
+  /team/invitations/{email}/revoke:
+    delete:
+      summary: Revoke Workspace Invitation
+      description: Cancels the pending invitation link.
+      parameters:
+        - name: email
+          in: path
+          required: true
+          schema:
+            type: string
+            format: email
+            example: "marc@acme.com"
+      responses:
+        '200':
+          description: Invitation successfully revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponseEnvelope'
+        '404':
+          description: No invitation found to revoke
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseEnvelope'
+
+  /developer/keys:
+    get:
+      summary: Retrieve Workspace API Keys
+      description: List live and sandbox API tokens with masked strings and usage times.
+      responses:
+        '200':
+          description: Keys loaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyListResponseEnvelope'
+
+  /developer/keys/create:
+    post:
+      summary: Generate API Key
+      description: Provision a server-side (`sk_`) or client-side (`pk_`) live or test API key.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateApiKeyRequestEnvelope'
+      responses:
+        '200':
+          description: Key successfully provisioned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateApiKeyResponseEnvelope'
+
+  /developer/webhooks:
+    get:
+      summary: List Webhook Endpoints
+      description: Retrieve webhook URLs listening to real-time events.
+      responses:
+        '200':
+          description: Webhook endpoints loaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookListResponseEnvelope'
+
+  /developer/webhooks/create:
+    post:
+      summary: Add Webhook Endpoint
+      description: Register a callback endpoint to dispatch event triggers.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddWebhookRequestEnvelope'
+      responses:
+        '200':
+          description: Webhook endpoint successfully added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddWebhookResponseEnvelope'
+        '400':
+          description: Invalid URL format or endpoint duplicate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseEnvelope'
+
+  /notifications:
+    get:
+      summary: List System Notifications
+      description: Query ledger audit logs, security notices, and dispute notifications.
+      responses:
+        '200':
+          description: Notifications ledger retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationListResponseEnvelope'
+
+  /notifications/mark-all-read:
+    post:
+      summary: Mark All Read
+      description: Reset all unread notification markers in the workspace catalog.
+      responses:
+        '200':
+          description: Status successfully updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponseEnvelope'
+
+  /notifications/preferences:
+    post:
+      summary: Update Notification Settings
+      description: Configure triggers for digests, disputes, payouts, and security logs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePreferencesRequestEnvelope'
+      responses:
+        '200':
+          description: Settings successfully updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponseEnvelope'
+
+  /profile:
+    get:
+      summary: Retrieve Profile settings
+      description: Get active profile identity, security, preferences, and connected integrations.
+      responses:
+        '200':
+          description: Profile configurations retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileResponseEnvelope'
+
+  /profile/update:
+    post:
+      summary: Update Profile Identity
+      description: Modify user identity details (name, title, phone).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequestEnvelope'
+      responses:
+        '200':
+          description: Identity updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileResponseEnvelope'
+        '400':
+          description: Invalid input parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseEnvelope'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    # Standard Request wrapping template
+    RequestEnvelope:
+      type: object
+      required:
+        - messageID
+        - primaryData
+      properties:
+        messageID:
+          type: string
+          description: Client-generated unique UUID to correlate messages and resolve deduplication.
+          pattern: '^[A-Z0-9]{7,36}$'
+          example: "XBYUURE"
+        primaryData:
+          type: object
+          description: The inner request payload.
+        additionalData:
+          type: array
+          description: Optional payload extensions.
+          items:
+            $ref: '#/components/schemas/KeyValuePair'
+
+    # Standard Response wrapping template
+    ResponseEnvelope:
+      type: object
+      required:
+        - statusCode
+        - statusDescription
+        - messageCode
+        - messageDescription
+        - messageID
+      properties:
+        statusCode:
+          type: string
+          description: API execution code. "0" signals clean success, positive numbers show application errors.
+          example: "0"
+        statusDescription:
+          type: string
+          description: Technical status text (e.g. Success, BusinessError, SystemError).
+          example: "Success"
+        messageCode:
+          type: string
+          description: HTTP equivalent code.
+          example: "200"
+        messageDescription:
+          type: string
+          description: Human-readable message detailing execution result.
+          example: "Processed successfully"
+        errorInfo:
+          oneOf:
+            - $ref: '#/components/schemas/ErrorInfo'
+            - type: 'null'
+          nullable: true
+        messageID:
+          type: string
+          description: Echoed request correlation ID.
+          example: "XBYUURE"
+        conversationID:
+          type: string
+          nullable: true
+          description: Correlating ledger tracking identifier.
+          example: "conv_8912A34"
+        additionalData:
+          type: array
+          items:
+            $ref: '#/components/schemas/KeyValuePair'
+        primaryData:
+          type: object
+          description: The inner response payload.
+
+    KeyValuePair:
+      type: object
+      required:
+        - key
+        - value
+      properties:
+        key:
+          type: string
+          example: "clientVersion"
+        value:
+          type: string
+          example: "1.0.4"
+
+    ErrorInfo:
+      type: object
+      required:
+        - errorCode
+        - errorMessage
+      properties:
+        errorCode:
+          type: string
+          description: Unique business domain error tag.
+          example: "VALIDATION_ERROR"
+        errorMessage:
+          type: string
+          description: Generic error notice.
+          example: "The request body failed schema validation."
+        fieldErrors:
+          type: array
+          items:
+            type: object
+            required:
+              - field
+              - message
+            properties:
+              field:
+                type: string
+                example: "primaryData.email"
+              message:
+                type: string
+                example: "Must be a valid work email address"
+
+    # Specific envelopes for requests & responses
+
+    ErrorResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              nullable: true
+              example: null
+
+    # Auth Login
+    LoginRequestEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "elena@acme.com"
+                password:
+                  type: string
+                  minLength: 8
+                  example: "securePassword123"
+
+    LoginResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - token
+                - user
+              properties:
+                token:
+                  type: string
+                  example: "session_token_xyz"
+                user:
+                  type: object
+                  required:
+                    - name
+                    - email
+                    - role
+                  properties:
+                    name:
+                      type: string
+                      example: "Elena Mendes"
+                    email:
+                      type: string
+                      format: email
+                      example: "elena@acme.com"
+                    role:
+                      type: string
+                      example: "Owner"
+
+    # Auth Signup
+    SignupRequestEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - name
+                - role
+                - email
+                - company
+                - password
+              properties:
+                name:
+                  type: string
+                  example: "Elena Mendes"
+                role:
+                  type: string
+                  example: "Head of Finance"
+                email:
+                  type: string
+                  format: email
+                  example: "elena@acme.com"
+                company:
+                  type: string
+                  example: "Acme Corp."
+                password:
+                  type: string
+                  minLength: 12
+                  example: "securePassword123"
+
+    # Forgot Password
+    ForgotPasswordRequestEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "elena@acme.com"
+
+    # Action Response Envelope
+    ActionResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - success
+              properties:
+                success:
+                  type: boolean
+                  example: true
+
+    # Dashboard Overview Response
+    DashboardOverviewResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - treasuryBalance
+                - todayVolume
+                - successfulPayments
+                - pendingPayouts
+                - checklist
+              properties:
+                treasuryBalance:
+                  type: number
+                  format: double
+                  example: 2481302.18
+                todayVolume:
+                  type: number
+                  format: double
+                  example: 42500.00
+                successfulPayments:
+                  type: integer
+                  example: 1248
+                pendingPayouts:
+                  type: number
+                  format: double
+                  example: 128450.00
+                checklist:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - task
+                      - status
+                      - completed
+                    properties:
+                      task:
+                        type: string
+                        example: "Verify business entity"
+                      status:
+                        type: string
+                        example: "Done"
+                      completed:
+                        type: boolean
+                        example: true
+
+    # Transaction List
+    TransactionListResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - transactions
+              properties:
+                transactions:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Transaction'
+
+    Transaction:
+      type: object
+      required:
+        - id
+        - date
+        - counterparty
+        - method
+        - amount
+        - status
+      properties:
+        id:
+          type: string
+          example: "txn_8K3JZ7"
+        date:
+          type: string
+          example: "Oct 24 · 10:42"
+        counterparty:
+          type: string
+          example: "Sarah Jenkins"
+        method:
+          type: string
+          example: "Card · Visa •• 4242"
+        amount:
+          type: string
+          description: Formatted string specifying ledger addition or deduction.
+          example: "+$1,250.00"
+        status:
+          type: string
+          enum: [Succeeded, Pending, Refunded, Disputed]
+          example: "Succeeded"
+
+    # Payout List
+    PayoutListResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - payouts
+              properties:
+                payouts:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Payout'
+
+    Payout:
+      type: object
+      required:
+        - id
+        - date
+        - source
+        - destination
+        - bank
+        - amount
+        - status
+      properties:
+        id:
+          type: string
+          example: "po_8L1A9K"
+        date:
+          type: string
+          example: "Oct 24 · 10:15"
+        source:
+          type: string
+          example: "Operating · USD"
+        destination:
+          type: string
+          example: "Chase •••• 9876"
+        bank:
+          type: string
+          example: "Chase Bank"
+        amount:
+          type: string
+          example: "$128,450.00"
+        status:
+          type: string
+          enum: [Succeeded, Pending, Failed]
+          example: "Pending"
+
+    # Payout Create
+    CreatePayoutRequestEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - source
+                - bank
+                - routing
+                - account
+                - amount
+              properties:
+                source:
+                  type: string
+                  example: "Operating · USD"
+                bank:
+                  type: string
+                  example: "Chase Bank"
+                routing:
+                  type: string
+                  pattern: '^[0-9]{9}$'
+                  description: 9-digit ABA routing transit number.
+                  example: "123456789"
+                account:
+                  type: string
+                  pattern: '^[0-9]{4,17}$'
+                  description: Bank account checking number.
+                  example: "9876543210"
+                amount:
+                  type: number
+                  format: double
+                  minimum: 1.00
+                  example: 1250.00
+                description:
+                  type: string
+                  maxLength: 100
+                  example: "Weekly Payroll"
+
+    CreatePayoutResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              $ref: '#/components/schemas/Payout'
+
+    # Customer List
+    CustomerListResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - customers
+              properties:
+                customers:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Customer'
+
+    Customer:
+      type: object
+      required:
+        - id
+        - name
+        - company
+        - email
+        - phone
+        - location
+        - volume
+        - ltv
+        - joined
+        - status
+        - paymentMethod
+      properties:
+        id:
+          type: string
+          example: "cus_8K2X1B"
+        name:
+          type: string
+          example: "Marta Chen"
+        company:
+          type: string
+          example: "Northwind Aero"
+        email:
+          type: string
+          format: email
+          example: "marta@northwind.aero"
+        phone:
+          type: string
+          example: "+1 (415) 304-2091"
+        location:
+          type: string
+          example: "San Francisco, CA"
+        volume:
+          type: string
+          example: "$182,400.00"
+        ltv:
+          type: string
+          example: "$42,500.00"
+        joined:
+          type: string
+          example: "Jan 12, 2026"
+        status:
+          type: string
+          enum: [Active, Inactive]
+          example: "Active"
+        paymentMethod:
+          type: string
+          example: "ACH · Chase •••• 5512"
+
+    # Customer Charges
+    CustomerChargesResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - charges
+              properties:
+                charges:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - id
+                      - date
+                      - desc
+                      - amount
+                      - status
+                    properties:
+                      id:
+                        type: string
+                        example: "ch_8K2XZ7"
+                      date:
+                        type: string
+                        example: "Today, 10:31"
+                      desc:
+                        type: string
+                        example: "Subscription · Enterprise"
+                      amount:
+                        type: string
+                        example: "+$8,400.00"
+                      status:
+                        type: string
+                        example: "Succeeded"
+
+    # Customer Create
+    CreateCustomerRequestEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - name
+                - company
+                - email
+              properties:
+                name:
+                  type: string
+                  example: "Marta Chen"
+                company:
+                  type: string
+                  example: "Northwind Aero"
+                email:
+                  type: string
+                  format: email
+                  example: "marta@northwind.aero"
+                phone:
+                  type: string
+                  example: "+1 (415) 304-2091"
+                location:
+                  type: string
+                  example: "San Francisco, CA"
+                initialVolume:
+                  type: number
+                  format: double
+                  default: 0.00
+                  example: 0.00
+
+    CreateCustomerResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              $ref: '#/components/schemas/Customer'
+
+    # Team Members
+    MemberListResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - members
+              properties:
+                members:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - email
+                      - role
+                      - last
+                      - initials
+                    properties:
+                      name:
+                        type: string
+                        example: "Elena Mendes"
+                      email:
+                        type: string
+                        format: email
+                        example: "elena@acme.com"
+                      role:
+                        type: string
+                        enum: [Owner, Admin, Finance, Developer, Read-only]
+                        example: "Owner"
+                      last:
+                        type: string
+                        example: "Active now"
+                      initials:
+                        type: string
+                        example: "EM"
+
+    # Pending Invites
+    PendingInviteListResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - invitations
+              properties:
+                invitations:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/PendingInvite'
+
+    PendingInvite:
+      type: object
+      required:
+        - email
+        - role
+        - invited
+      properties:
+        email:
+          type: string
+          format: email
+          example: "marc@acme.com"
+        role:
+          type: string
+          enum: [Owner, Admin, Finance, Developer, Read-only]
+          example: "Finance"
+        invited:
+          type: string
+          example: "Oct 22"
+
+    # Team Invite
+    InviteMemberRequestEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - email
+                - role
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "marc@acme.com"
+                role:
+                  type: string
+                  enum: [Owner, Admin, Finance, Developer, Read-only]
+                  example: "Finance"
+
+    InviteMemberResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              $ref: '#/components/schemas/PendingInvite'
+
+    # API Keys List
+    ApiKeyListResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - keys
+              properties:
+                keys:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ApiKey'
+
+    ApiKey:
+      type: object
+      required:
+        - name
+        - key
+        - env
+        - last
+      properties:
+        name:
+          type: string
+          example: "Production · Server"
+        key:
+          type: string
+          example: "sk_live_••••_8Q21f3"
+        env:
+          type: string
+          enum: [live, test]
+          example: "live"
+        last:
+          type: string
+          example: "12 min ago"
+
+    # API Key Create
+    CreateApiKeyRequestEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - name
+                - env
+                - type
+              properties:
+                name:
+                  type: string
+                  example: "Server Production"
+                env:
+                  type: string
+                  enum: [live, test]
+                  example: "live"
+                type:
+                  type: string
+                  enum: [Server, Publishable]
+                  example: "Server"
+
+    CreateApiKeyResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              $ref: '#/components/schemas/ApiKey'
+
+    # Webhooks List
+    WebhookListResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - webhooks
+              properties:
+                webhooks:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/WebhookEndpointSchema'
+
+    WebhookEndpointSchema:
+      type: object
+      required:
+        - url
+        - events
+        - status
+      properties:
+        url:
+          type: string
+          format: uri
+          example: "https://api.acme.com/zia/webhook"
+        events:
+          type: integer
+          example: 24
+        status:
+          type: string
+          enum: [Healthy, Paused]
+          example: "Healthy"
+
+    # Webhook Add
+    AddWebhookRequestEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - url
+                - status
+              properties:
+                url:
+                  type: string
+                  format: uri
+                  example: "https://api.acme.com/zia/webhook"
+                status:
+                  type: string
+                  enum: [Healthy, Paused]
+                  example: "Healthy"
+
+    AddWebhookResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              $ref: '#/components/schemas/WebhookEndpointSchema'
+
+    # Notifications List
+    NotificationListResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - notifications
+              properties:
+                notifications:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Notification'
+
+    Notification:
+      type: object
+      required:
+        - id
+        - tone
+        - title
+        - body
+        - time
+        - unread
+        - category
+      properties:
+        id:
+          type: string
+          example: "notif_1"
+        tone:
+          type: string
+          enum: [neutral, success, warning, danger, info]
+          example: "danger"
+        title:
+          type: string
+          example: "Dispute opened on charge ch_8K0AVV"
+        body:
+          type: string
+          example: "Atlas Studio filed a chargeback for $219.00. Evidence due Oct 31."
+        time:
+          type: string
+          example: "12 min ago"
+        unread:
+          type: boolean
+          example: true
+        category:
+          type: string
+          enum: [Disputes, Payouts, Security, Product]
+          example: "Disputes"
+
+    # Save preferences
+    UpdatePreferencesRequestEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - emailDigest
+                - disputeAlert
+                - payoutAlert
+                - securityAlert
+              properties:
+                emailDigest:
+                  type: boolean
+                  example: true
+                disputeAlert:
+                  type: boolean
+                  example: true
+                payoutAlert:
+                  type: boolean
+                  example: true
+                securityAlert:
+                  type: boolean
+                  example: true
+
+    # Profile Settings Response
+    ProfileResponseEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/ResponseEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - user
+                - security
+                - preferences
+                - integrations
+              properties:
+                user:
+                  type: object
+                  required:
+                    - name
+                    - title
+                    - email
+                    - phone
+                    - role
+                  properties:
+                    name:
+                      type: string
+                      example: "Elena Mendes"
+                    title:
+                      type: string
+                      example: "Head of Finance"
+                    email:
+                      type: string
+                      format: email
+                      example: "elena@acme.com"
+                    phone:
+                      type: string
+                      example: "+1 415 555 0114"
+                    role:
+                      type: string
+                      example: "Owner"
+                security:
+                  type: object
+                  required:
+                    - passwordLastChanged
+                    - twoFactorEnabled
+                    - hardwareKeysCount
+                    - activeSessionsCount
+                  properties:
+                    passwordLastChanged:
+                      type: string
+                      example: "41 days ago"
+                    twoFactorEnabled:
+                      type: boolean
+                      example: true
+                    hardwareKeysCount:
+                      type: integer
+                      example: 0
+                    activeSessionsCount:
+                      type: integer
+                      example: 3
+                preferences:
+                  type: object
+                  required:
+                    - dailyDigest
+                    - alertOnDisputes
+                    - weeklyTreasuryReport
+                    - betaFeatures
+                  properties:
+                    dailyDigest:
+                      type: boolean
+                      example: true
+                    alertOnDisputes:
+                      type: boolean
+                      example: true
+                    weeklyTreasuryReport:
+                      type: boolean
+                      example: false
+                    betaFeatures:
+                      type: boolean
+                      example: false
+                integrations:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - detail
+                    properties:
+                      name:
+                        type: string
+                        example: "Slack"
+                      detail:
+                        type: string
+                        example: "#finance-alerts"
+
+    # Update Profile Request
+    UpdateProfileRequestEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - properties:
+            primaryData:
+              type: object
+              required:
+                - name
+                - title
+                - phone
+              properties:
+                name:
+                  type: string
+                  example: "Elena Mendes"
+                title:
+                  type: string
+                  example: "Head of Finance"
+                phone:
+                  type: string
+                  example: "+1 415 555 0114"

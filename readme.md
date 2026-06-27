@@ -1,7 +1,7 @@
 # Zia
 
 **A unified payment aggregator/switch for Africa-first commerce.**
-One integration. Six payment rails. M-Pesa, KCB, PayPal, Paystack, Stripe, and Wise — orchestrated through a single, provider-agnostic API.
+One integration. Six payment rails. M-Pesa, KCB, PayPal, Paystack, Stripe, and Pesalink — orchestrated through a single, provider-agnostic API.
 
 > "Zia" — Swahili for "cross over." Zia is the bridge merchants use to move money across payment rails without building and maintaining six separate integrations.
 
@@ -38,7 +38,7 @@ One integration. Six payment rails. M-Pesa, KCB, PayPal, Paystack, Stripe, and W
 
 ## What is Zia?
 
-Zia is a **payment switch**, not a single payment gateway. Merchants integrate once against Zia's API and can collect payments via mobile money (M-Pesa, KCB) and cards/wallets (Stripe, PayPal, Paystack), while Zia handles cross-currency merchant settlement and payouts via Wise — all behind one canonical `PaymentIntent` model.
+Zia is a **payment switch**, not a single payment gateway. Merchants integrate once against Zia's API and can collect payments via mobile money (M-Pesa, KCB) and cards/wallets (Stripe, PayPal, Paystack), while Zia handles cross-currency merchant settlement and payouts via Pesalink — all behind one canonical `PaymentIntent` model.
 
 Zia exists to solve three problems merchants in Kenya and across Africa hit immediately when accepting payments:
 
@@ -61,9 +61,9 @@ A **JavaScript embeddable checkout widget** is on the roadmap (see [Roadmap](#ro
 | **Stripe** | Collection (cards/wallets) | Global | PaymentIntents, client-side tokenization |
 | **Paystack** | Collection (cards + mobile money) | Africa-wide | Hosted/inline checkout, webhook-confirmed |
 | **PayPal** | Collection (cards/wallet) | Global | Orders API v2, redirect/approve/capture |
-| **Wise** | Settlement, merchant payouts, FX/treasury | Global | Quote → Recipient → Transfer → Fund |
+| **Pesalink** | Settlement, merchant payouts, FX/treasury | Global | Quote → Recipient → Transfer → Fund |
 
-> **Note:** Wise is intentionally not a "collection" method in this system — it has no consumer-facing checkout. It is the engine behind merchant settlement and cross-currency payouts. See `ARCHITECTURE.md §5.1` for the rationale.
+> **Note:** Pesalink is intentionally not a "collection" method in this system — it has no consumer-facing checkout. It is the engine behind merchant settlement and cross-currency payouts. See `ARCHITECTURE.md §5.1` for the rationale.
 
 ---
 
@@ -75,7 +75,7 @@ flowchart LR
     GW --> ORC[Orchestrator]
     ORC --> RTE[Routing Engine]
     ORC --> Conn[Connector Layer]
-    Conn --> PSP[(M-Pesa / KCB / PayPal / Paystack / Stripe / Wise)]
+    Conn --> PSP[(M-Pesa / KCB / PayPal / Paystack / Stripe / Pesalink)]
     PSP -->|webhooks| WH[Webhook Ingestion]
     WH --> ORC
     ORC --> LED[(Ledger - Postgres)]
@@ -131,7 +131,7 @@ Zia/
 │       ├── paypal/
 │       ├── paystack/
 │       ├── stripe/
-│       └── wise/
+│       └── Pesalink/
 ├── pkg/
 │   ├── httpsign/
 │   └── moneyutil/
@@ -164,7 +164,7 @@ Zia/
     - [Stripe](https://dashboard.stripe.com/register) (test mode keys)
     - [Paystack](https://dashboard.paystack.com/#/signup) (test mode keys)
     - [PayPal Developer](https://developer.paypal.com/) (sandbox app)
-    - [Wise Sandbox](https://sandbox.transferwise.tech/) (business sandbox account)
+    - [Pesalink Sandbox](https://sandbox.transferPesalink.tech/) (business sandbox account)
 
 ---
 
@@ -234,9 +234,9 @@ PAYPAL_CLIENT_ID=
 PAYPAL_CLIENT_SECRET=
 PAYPAL_WEBHOOK_ID=
 
-# Wise
-WISE_API_TOKEN=
-WISE_PROFILE_ID=
+# Pesalink
+Pesalink_API_TOKEN=
+Pesalink_PROFILE_ID=
 
 # Security
 VAULT_ADDR=
