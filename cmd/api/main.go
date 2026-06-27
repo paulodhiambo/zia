@@ -78,7 +78,12 @@ func main() {
 	defer logger.Sync()
 	zap.ReplaceGlobals(logger)
 
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.redisURL})
+	rdbOpts, err := redis.ParseURL(cfg.redisURL)
+	if err != nil {
+		logger.Warn("invalid redis URL, using default", zap.String("url", cfg.redisURL), zap.Error(err))
+		rdbOpts = &redis.Options{Addr: "localhost:6379"}
+	}
+	rdb := redis.NewClient(rdbOpts)
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		logger.Warn("redis not available, continuing without cache", zap.Error(err))
 	}

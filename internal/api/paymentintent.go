@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"zia/internal/authn"
 	"zia/internal/domain"
 	"zia/internal/orchestrator"
 	"zia/internal/service"
@@ -84,7 +85,11 @@ func (h *PaymentIntentHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	merchantID := r.Context().Value(ctxKey("merchant_id")).(string)
+	merchantID, ok := r.Context().Value(authn.MerchantIDKey).(string)
+	if !ok || merchantID == "" {
+		respondError(w, r, http.StatusUnauthorized, "1002", "unauthorized")
+		return
+	}
 
 	orcReq := orchestrator.CreatePIRequest{
 		MerchantID:    merchantID,

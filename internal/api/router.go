@@ -34,8 +34,8 @@ func NewRouter(deps Dependencies) http.Handler {
 	r.Post("/v1/webhooks/{psp}", deps.WebhookHandler.Ingest)
 
 	r.Route("/v1/payment_intents", func(r chi.Router) {
-		r.Post("/", deps.PIHandler.Create)
-		r.Get("/{id}", deps.PIHandler.Get)
+		r.With(deps.AuthMiddleware).Post("/", deps.PIHandler.Create)
+		r.With(deps.AuthMiddleware).Get("/{id}", deps.PIHandler.Get)
 	})
 
 	if deps.MerchantHandler != nil {

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 
 	"zia/internal/domain"
 )
@@ -84,6 +85,9 @@ func (r *merchantRepo) CreateAPIKey(ctx context.Context, k *domain.APIKey) error
 }
 
 func (r *merchantRepo) GetAPIKeyByHash(ctx context.Context, hash string) (*domain.APIKey, error) {
+	if r.db == nil {
+		return nil, errors.New("no database connection")
+	}
 	k := &domain.APIKey{}
 	err := r.db.QueryRow(ctx, `
 		SELECT id, merchant_id, key_hash, key_prefix, environment, created_at

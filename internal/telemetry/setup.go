@@ -2,7 +2,12 @@ package telemetry
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"log"
+	"net/url"
+	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -12,10 +17,10 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/log"
-	"go.opentelemetry.io/otel/sdk/metric"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
-	"go.opentelemetry.io/otel/sdk/trace"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
@@ -28,7 +33,51 @@ type Config struct {
 	SampleRate  float64
 }
 
+// quietErrorHandler suppresses "connection refused" noise when the OTel
+// backend (OpenObserve) isn't running. All other errors are logged once.
+// Without this the SDK prints a line every 15 s (one per metric flush) to
+// stderr, which drowns out real log output in local dev.
+type quietErrorHandler struct {
+	mu   sync.Mutex
+	seen map[string]struct{}
+}
+
+func (h *quietErrorHandler) Handle(err error) {
+	msg := err.Error()
+	if strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "no such host") {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, ok := h.seen[msg]; !ok {
+		h.seen[msg] = struct{}{}
+		log.Printf("otel: %v", err)
+	}
+}
+
+// endpointParts parses cfg.Endpoint (a full URL like "http://localhost:5080")
+// and returns the host:port string and whether the scheme is plain HTTP.
+// WithEndpoint on OTLP HTTP exporters expects host:port, not a full URL.
+func endpointParts(endpoint string) (host string, insecure bool, err error) {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return "", false, err
+	}
+	return u.Host, u.Scheme == "http", nil
+}
+
+func authHeader(username, password string) map[string]string {
+	if username == "" {
+		return nil
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+	return map[string]string{"Authorization": "Basic " + encoded}
+}
+
 func Setup(ctx context.Context, cfg Config) (shutdown func(context.Context) error, err error) {
+	otel.SetErrorHandler(&quietErrorHandler{seen: make(map[string]struct{})})
+
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
 			semconv.ServiceName(cfg.ServiceName),
@@ -78,52 +127,85 @@ func Setup(ctx context.Context, cfg Config) (shutdown func(context.Context) erro
 	return shutdown, nil
 }
 
-func newTraceProvider(ctx context.Context, cfg Config, res *resource.Resource) (*trace.TracerProvider, error) {
-	exp, err := otlptracehttp.New(ctx,
-		otlptracehttp.WithEndpoint(cfg.Endpoint),
-		otlptracehttp.WithURLPath("/api/default/v1/traces"),
-	)
+func newTraceProvider(ctx context.Context, cfg Config, res *resource.Resource) (*sdktrace.TracerProvider, error) {
+	host, insecure, err := endpointParts(cfg.Endpoint)
 	if err != nil {
 		return nil, err
 	}
 
-	tp := trace.NewTracerProvider(
-		trace.WithBatcher(exp, trace.WithBatchTimeout(5*time.Second)),
-		trace.WithResource(res),
-		trace.WithSampler(trace.ParentBased(trace.TraceIDRatioBased(cfg.SampleRate))),
+	opts := []otlptracehttp.Option{
+		otlptracehttp.WithEndpoint(host),
+		otlptracehttp.WithURLPath("/api/default/v1/traces"),
+		otlptracehttp.WithHeaders(authHeader(cfg.Username, cfg.Password)),
+	}
+	if insecure {
+		opts = append(opts, otlptracehttp.WithInsecure())
+	}
+
+	exp, err := otlptracehttp.New(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exp, sdktrace.WithBatchTimeout(5*time.Second)),
+		sdktrace.WithResource(res),
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.SampleRate))),
 	)
 	return tp, nil
 }
 
-func newMeterProvider(ctx context.Context, cfg Config, res *resource.Resource) (*metric.MeterProvider, error) {
-	exp, err := otlpmetrichttp.New(ctx,
-		otlpmetrichttp.WithEndpoint(cfg.Endpoint),
-		otlpmetrichttp.WithURLPath("/api/default/v1/metrics"),
-	)
+func newMeterProvider(ctx context.Context, cfg Config, res *resource.Resource) (*sdkmetric.MeterProvider, error) {
+	host, insecure, err := endpointParts(cfg.Endpoint)
 	if err != nil {
 		return nil, err
 	}
 
-	mp := metric.NewMeterProvider(
-		metric.WithReader(metric.NewPeriodicReader(exp,
-			metric.WithInterval(15*time.Second))),
-		metric.WithResource(res),
+	opts := []otlpmetrichttp.Option{
+		otlpmetrichttp.WithEndpoint(host),
+		otlpmetrichttp.WithURLPath("/api/default/v1/metrics"),
+		otlpmetrichttp.WithHeaders(authHeader(cfg.Username, cfg.Password)),
+	}
+	if insecure {
+		opts = append(opts, otlpmetrichttp.WithInsecure())
+	}
+
+	exp, err := otlpmetrichttp.New(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	mp := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exp,
+			sdkmetric.WithInterval(15*time.Second))),
+		sdkmetric.WithResource(res),
 	)
 	return mp, nil
 }
 
-func newLoggerProvider(ctx context.Context, cfg Config, res *resource.Resource) (*log.LoggerProvider, error) {
-	exp, err := otlploghttp.New(ctx,
-		otlploghttp.WithEndpoint(cfg.Endpoint),
-		otlploghttp.WithURLPath("/api/default/v1/logs"),
-	)
+func newLoggerProvider(ctx context.Context, cfg Config, res *resource.Resource) (*sdklog.LoggerProvider, error) {
+	host, insecure, err := endpointParts(cfg.Endpoint)
 	if err != nil {
 		return nil, err
 	}
 
-	lp := log.NewLoggerProvider(
-		log.WithProcessor(log.NewBatchProcessor(exp)),
-		log.WithResource(res),
+	opts := []otlploghttp.Option{
+		otlploghttp.WithEndpoint(host),
+		otlploghttp.WithURLPath("/api/default/v1/logs"),
+		otlploghttp.WithHeaders(authHeader(cfg.Username, cfg.Password)),
+	}
+	if insecure {
+		opts = append(opts, otlploghttp.WithInsecure())
+	}
+
+	exp, err := otlploghttp.New(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	lp := sdklog.NewLoggerProvider(
+		sdklog.WithProcessor(sdklog.NewBatchProcessor(exp)),
+		sdklog.WithResource(res),
 	)
 	return lp, nil
 }

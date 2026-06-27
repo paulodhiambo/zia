@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -19,7 +20,7 @@ func Middleware(repo repository.MerchantRepository) func(http.Handler) http.Hand
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			auth := r.Header.Get("Authorization")
 			if auth == "" || !strings.HasPrefix(auth, "Bearer ") {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				writeUnauthorized(w)
 				return
 			}
 
@@ -29,7 +30,7 @@ func Middleware(repo repository.MerchantRepository) func(http.Handler) http.Hand
 
 			key, err := repo.GetAPIKeyByHash(r.Context(), hashStr)
 			if err != nil {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				writeUnauthorized(w)
 				return
 			}
 
@@ -37,4 +38,17 @@ func Middleware(repo repository.MerchantRepository) func(http.Handler) http.Hand
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func writeUnauthorized(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	json.NewEncoder(w).Encode(map[string]any{
+		"statusCode":        "1002",
+		"statusDescription": "Authentication failed",
+		"messageCode":       "401",
+		"messageDescription": "Invalid or missing credentials",
+		"errorInfo":         map[string]string{"errorCode": "1002", "errorMessage": "unauthorized"},
+		"primaryData":       nil,
+	})
 }
