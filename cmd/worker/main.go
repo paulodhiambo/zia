@@ -7,14 +7,25 @@ import (
 	"os/signal"
 	"syscall"
 
+	"zia/internal/connector"
+	"zia/internal/idempotency"
+	"zia/internal/ledger"
+	"zia/internal/orchestrator"
+	"zia/internal/repository"
+	"zia/internal/risk"
+	"zia/internal/routing"
 	"zia/internal/telemetry"
+	"zia/internal/webhook"
 
+	"github.com/nats-io/nats.go"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
 type config struct {
 	natsURL     string
 	databaseURL string
+	redisURL    string
 	telemetry   telemetry.Config
 }
 
@@ -22,6 +33,7 @@ func loadConfig() config {
 	return config{
 		natsURL:     getEnv("NATS_URL", "nats://localhost:4222"),
 		databaseURL: getEnv("DATABASE_URL", "postgres://zia:zia@localhost:5432/zia?sslmode=disable"),
+		redisURL:    getEnv("REDIS_URL", "redis://localhost:6379/0"),
 		telemetry: telemetry.Config{
 			Endpoint:    getEnv("OO_ENDPOINT", "http://localhost:5080"),
 			Username:    getEnv("OO_EMAIL", "admin@zia.dev"),
@@ -51,7 +63,57 @@ func main() {
 	}
 	defer logger.Sync()
 
-	logger.Info("worker starting", zap.String("nats_url", cfg.natsURL))
+	rdb := redis.NewClient(&redis.Options{Addr: cfg.redisURL})
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		logger.Warn("redis not available, continuing without cache", zap.Error(err))
+	}
+
+	nc, err := nats.Connect(cfg.natsURL)
+	if err != nil {
+		logger.Fatal("failed to connect to nats", zap.Error(err))
+	}
+	defer nc.Close()
+
+	js, err := nc.JetStream()
+	if err != nil {
+		logger.Fatal("failed to create jetstream context", zap.Error(err))
+	}
+
+	if _, err := js.AddStream(&nats.StreamConfig{
+		Name:     "zia",
+		Subjects: []string{"zia.>"},
+	}); err != nil {
+		logger.Warn("stream may already exist", zap.Error(err))
+	}
+
+	piRepo := repository.NewPaymentIntent(nil)
+	attRepo := repository.NewAttempt(nil)
+	ledRepo := repository.NewLedger(nil)
+	idempotencyStore := idempotency.NewStore(rdb)
+	riskEng := risk.NewEngine()
+	cb := routing.NewCircuitBreaker()
+	routingEng := routing.NewEngine(cb, logger)
+	ledgerEng := ledger.NewEngine(ledRepo)
+	registry := connector.NewRegistry()
+
+	orc := orchestrator.New(
+		piRepo,
+		attRepo,
+		registry,
+		routingEng,
+		riskEng,
+		idempotencyStore,
+		logger,
+		ledgerEng,
+	)
+
+	processor := webhook.NewProcessor(orc, js, logger)
+
+	if err := processor.StartConsumer(ctx); err != nil {
+		logger.Fatal("failed to start consumer", zap.Error(err))
+	}
+
+	logger.Info("worker started, consuming from zia.webhook.received")
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

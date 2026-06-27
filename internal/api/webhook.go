@@ -8,7 +8,6 @@ import (
 
 	"zia/internal/connector"
 	"zia/internal/domain"
-	"zia/internal/orchestrator"
 	"zia/internal/repository"
 	"zia/internal/webhook"
 
@@ -17,26 +16,26 @@ import (
 )
 
 type WebhookHandler struct {
-	registry *connector.Registry
-	whRepo   repository.WebhookEventRepository
-	orc      *orchestrator.Engine
-	dedup    *webhook.DedupStore
-	logger   *zap.Logger
+	registry  *connector.Registry
+	whRepo    repository.WebhookEventRepository
+	dedup     *webhook.DedupStore
+	publisher *webhook.Processor
+	logger    *zap.Logger
 }
 
 func NewWebhookHandler(
 	registry *connector.Registry,
 	whRepo repository.WebhookEventRepository,
-	orc *orchestrator.Engine,
 	dedup *webhook.DedupStore,
+	publisher *webhook.Processor,
 	logger *zap.Logger,
 ) *WebhookHandler {
 	return &WebhookHandler{
-		registry: registry,
-		whRepo:   whRepo,
-		orc:      orc,
-		dedup:    dedup,
-		logger:   logger,
+		registry:  registry,
+		whRepo:    whRepo,
+		dedup:     dedup,
+		publisher: publisher,
+		logger:    logger,
 	}
 }
 
@@ -116,8 +115,8 @@ func (h *WebhookHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 		zap.ByteString("hook", hook),
 	)
 
-	if err := h.orc.HandleWebhookEvent(r.Context(), event); err != nil {
-		h.logger.Error("webhook processing failed",
+	if err := h.publisher.Publish(r.Context(), event); err != nil {
+		h.logger.Error("failed to publish webhook event to nats",
 			zap.String("psp", psp),
 			zap.Error(err),
 		)

@@ -21,6 +21,7 @@ import (
 	"zia/internal/telemetry"
 	"zia/internal/webhook"
 
+	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
@@ -91,6 +92,15 @@ func main() {
 
 	dedupStore := webhook.NewDedupStore(rdb)
 
+	nc, err := nats.Connect(cfg.natsURL)
+	if err != nil {
+		logger.Warn("nats not available, continuing without event bus", zap.Error(err))
+	}
+	var js nats.JetStreamContext
+	if nc != nil {
+		js, _ = nc.JetStream()
+	}
+
 	orc := orchestrator.New(
 		piRepo,
 		attRepo,
@@ -102,10 +112,12 @@ func main() {
 		ledgerEng,
 	)
 
+	webhookProc := webhook.NewProcessor(orc, js, logger)
+
 	piSvc := service.NewPaymentIntent(orc)
 
 	piHandler := api.NewPaymentIntentHandler(piSvc)
-	whHandler := api.NewWebhookHandler(registry, whRepo, orc, dedupStore, logger)
+	whHandler := api.NewWebhookHandler(registry, whRepo, dedupStore, webhookProc, logger)
 
 	router := api.NewRouter(api.Dependencies{
 		Logger:        logger,
