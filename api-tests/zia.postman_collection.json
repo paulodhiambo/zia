@@ -1,0 +1,884 @@
+{
+	"info": {
+		"name": "Zia Payment API",
+		"description": "Complete collection for the Zia payment aggregator API — merchant endpoints, portal (frontend) endpoints, and PSP webhook ingestion.\n\n## Authentication\n\n- **Merchant API**: `Authorization: Bearer {{api_key}}` — API key created via the portal (Create API Key).\n- **Portal API**: `Authorization: Bearer {{portal_token}}` — session token returned by `POST /api/v1/auth/login`.\n\n## Base URL\n\nSet `base_url` to the running API instance (default `http://localhost:8080`).",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{ "key": "base_url", "value": "http://localhost:8080", "type": "string" },
+		{ "key": "api_key", "value": "YOUR_MERCHANT_API_KEY", "type": "string" },
+		{ "key": "portal_token", "value": "", "type": "string" },
+		{ "key": "payment_intent_id", "value": "", "type": "string" },
+		{ "key": "checkout_token", "value": "", "type": "string" },
+		{ "key": "customer_id", "value": "", "type": "string" },
+		{ "key": "invite_email", "value": "colleague@example.com", "type": "string" }
+	],
+	"item": [
+		{
+			"name": "Health",
+			"item": [
+				{
+					"name": "GET /health",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"status is ok\", () => {",
+									"    pm.response.to.have.status(200);",
+									"    pm.expect(pm.response.json().primaryData.status).to.eql(\"ok\");",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": "{{base_url}}/health"
+					}
+				}
+			]
+		},
+		{
+			"name": "Payment Intents",
+			"item": [
+				{
+					"name": "Create Payment Intent",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"create payment intent\", () => {",
+									"    pm.response.to.have.status(200);",
+									"    var json = pm.response.json();",
+									"    pm.expect(json.statusCode).to.eql(\"0\");",
+									"    pm.collectionVariables.set(\"payment_intent_id\", json.primaryData.id);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{api_key}}", "type": "text" },
+							{ "key": "Content-Type", "value": "application/json", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"messageID\": \"{{$guid}}\",\n  \"primaryData\": {\n    \"amountMinor\": 15000,\n    \"currency\": \"KES\",\n    \"method\": \"mpesa_stk\",\n    \"customerPhone\": \"254712345678\",\n    \"customerEmail\": \"buyer@example.com\",\n    \"customerRef\": \"cus_abc123\"\n  }\n}"
+						},
+						"url": "{{base_url}}/v1/payment_intents"
+					}
+				},
+				{
+					"name": "Get Payment Intent",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"get payment intent\", () => {",
+									"    pm.response.to.have.status(200);",
+									"    var json = pm.response.json();",
+									"    pm.expect(json.primaryData.id).to.eql(pm.collectionVariables.get(\"payment_intent_id\"));",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{api_key}}", "type": "text" }
+						],
+						"url": "{{base_url}}/v1/payment_intents/{{payment_intent_id}}"
+					}
+				}
+			]
+		},
+		{
+			"name": "Merchant",
+			"item": [
+				{
+					"name": "Dashboard",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"dashboard\", () => {",
+									"    pm.response.to.have.status(200);",
+									"    var d = pm.response.json().primaryData;",
+									"    pm.expect(d.merchant).to.not.be.empty;",
+									"    pm.expect(d.balances).to.not.be.empty;",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{api_key}}", "type": "text" }
+						],
+						"url": "{{base_url}}/v1/merchant/dashboard"
+					}
+				},
+				{
+					"name": "List Transactions",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"list transactions\", () => {",
+									"    pm.response.to.have.status(200);",
+									"    pm.expect(pm.response.json().primaryData.transactions).to.be.an(\"array\");",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{api_key}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{base_url}}/v1/merchant/transactions?limit=20&offset=0",
+							"host": ["{{base_url}}"],
+							"path": ["v1", "merchant", "transactions"],
+							"query": [
+								{ "key": "limit", "value": "20" },
+								{ "key": "offset", "value": "0" }
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Balance",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"get balance\", () => {",
+									"    pm.response.to.have.status(200);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{api_key}}", "type": "text" }
+						],
+						"url": "{{base_url}}/v1/merchant/balance"
+					}
+				},
+				{
+					"name": "List Payouts",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"list payouts\", () => {",
+									"    pm.response.to.have.status(200);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{api_key}}", "type": "text" }
+						],
+						"url": "{{base_url}}/v1/merchant/payouts"
+					}
+				},
+				{
+					"name": "Get Settings",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{api_key}}", "type": "text" }
+						],
+						"url": "{{base_url}}/v1/merchant/settings"
+					}
+				},
+				{
+					"name": "Update Settings",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{api_key}}", "type": "text" },
+							{ "key": "Content-Type", "value": "application/json", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"webhookUrl\": \"https://example.com/zia-webhooks\"\n}"
+						},
+						"url": "{{base_url}}/v1/merchant/settings"
+					}
+				}
+			]
+		},
+		{
+			"name": "Checkout",
+			"item": [
+				{
+					"name": "Create Checkout Session",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"create checkout session\", () => {",
+									"    pm.response.to.have.status(201);",
+									"    var json = pm.response.json();",
+									"    pm.collectionVariables.set(\"checkout_token\", json.primaryData.token);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{api_key}}", "type": "text" },
+							{ "key": "Content-Type", "value": "application/json", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"amountMinor\": 5000,\n  \"currency\": \"KES\",\n  \"customerEmail\": \"buyer@example.com\",\n  \"customerPhone\": \"254712345678\",\n  \"callbackUrl\": \"https://example.com/checkout-callback\"\n}"
+						},
+						"url": "{{base_url}}/v1/checkout"
+					}
+				},
+				{
+					"name": "Get Checkout Status",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"get checkout status\", () => {",
+									"    pm.response.to.have.status(200);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"url": "{{base_url}}/v1/checkout/{{checkout_token}}"
+					}
+				},
+				{
+					"name": "Get checkout.js",
+					"request": {
+						"method": "GET",
+						"url": "{{base_url}}/checkout.js"
+					}
+				}
+			]
+		},
+		{
+			"name": "Portal Auth",
+			"item": [
+				{
+					"name": "Signup",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"signup\", () => {",
+									"    pm.response.to.have.status(200);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"messageID\": \"{{$guid}}\",\n  \"primaryData\": {\n    \"name\": \"Jane Doe\",\n    \"email\": \"jane@example.com\",\n    \"company\": \"Acme Corp\",\n    \"country\": \"KE\",\n    \"currency\": \"KES\",\n    \"password\": \"SecurePass123!\"\n  }\n}"
+						},
+						"url": "{{base_url}}/api/v1/auth/signup"
+					}
+				},
+				{
+					"name": "Login",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"login\", () => {",
+									"    pm.response.to.have.status(200);",
+									"    var json = pm.response.json();",
+									"    var token = json.primaryData.token;",
+									"    pm.expect(token).to.not.be.empty;",
+									"    pm.collectionVariables.set(\"portal_token\", token);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"messageID\": \"{{$guid}}\",\n  \"primaryData\": {\n    \"email\": \"jane@example.com\",\n    \"password\": \"SecurePass123!\"\n  }\n}"
+						},
+						"url": "{{base_url}}/api/v1/auth/login"
+					}
+				},
+				{
+					"name": "Forgot Password",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"messageID\": \"{{$guid}}\",\n  \"primaryData\": {\n    \"email\": \"jane@example.com\"\n  }\n}"
+						},
+						"url": "{{base_url}}/api/v1/auth/forgot-password"
+					}
+				}
+			]
+		},
+		{
+			"name": "Portal Dashboard",
+			"item": [
+				{
+					"name": "Overview",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"dashboard overview\", () => {",
+									"    pm.response.to.have.status(200);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" }
+						],
+						"url": "{{base_url}}/api/v1/dashboard/overview"
+					}
+				}
+			]
+		},
+		{
+			"name": "Portal Transactions",
+			"item": [
+				{
+					"name": "List Transactions",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"list transactions\", () => {",
+									"    pm.response.to.have.status(200);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/transactions?limit=20&offset=0",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "transactions"],
+							"query": [
+								{ "key": "limit", "value": "20" },
+								{ "key": "offset", "value": "0" }
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Portal Payouts",
+			"item": [
+				{
+					"name": "List Payouts",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"list payouts\", () => {",
+									"    pm.response.to.have.status(200);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/payouts?limit=20&offset=0",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "payouts"],
+							"query": [
+								{ "key": "limit", "value": "20" },
+								{ "key": "offset", "value": "0" }
+							]
+						}
+					}
+				},
+				{
+					"name": "Create Payout",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" },
+							{ "key": "Content-Type", "value": "application/json", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"messageID\": \"{{$guid}}\",\n  \"primaryData\": {\n    \"source\": \"Operating\",\n    \"bank\": \"Equity\",\n    \"account\": \"1234567890\",\n    \"amount\": 25000.00,\n    \"currency\": \"KES\",\n    \"description\": \"Monthly settlement\"\n  }\n}"
+						},
+						"url": "{{base_url}}/api/v1/payouts/create"
+					}
+				}
+			]
+		},
+		{
+			"name": "Portal Customers",
+			"item": [
+				{
+					"name": "List Customers",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"list customers\", () => {",
+									"    pm.response.to.have.status(200);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/customers?limit=20&offset=0",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "customers"],
+							"query": [
+								{ "key": "limit", "value": "20" },
+								{ "key": "offset", "value": "0" },
+								{ "key": "search", "value": "", "disabled": true },
+								{ "key": "status", "value": "", "disabled": true }
+							]
+						}
+					}
+				},
+				{
+					"name": "Create Customer",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"create customer\", () => {",
+									"    pm.response.to.have.status(200);",
+									"    var json = pm.response.json();",
+									"    pm.collectionVariables.set(\"customer_id\", json.primaryData.id);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" },
+							{ "key": "Content-Type", "value": "application/json", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"messageID\": \"{{$guid}}\",\n  \"primaryData\": {\n    \"name\": \"John Buyer\",\n    \"company\": \"Buyer Inc\",\n    \"email\": \"john@buyer.com\",\n    \"phone\": \"254712345678\",\n    \"location\": \"Nairobi, Kenya\",\n    \"initialVolume\": 100000\n  }\n}"
+						},
+						"url": "{{base_url}}/api/v1/customers/create"
+					}
+				},
+				{
+					"name": "Get Customer",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"get customer\", () => {",
+									"    pm.response.to.have.status(200);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" }
+						],
+						"url": "{{base_url}}/api/v1/customers/{{customer_id}}"
+					}
+				},
+				{
+					"name": "Get Customer Charges",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/customers/{{customer_id}}/charges?limit=20&offset=0",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "customers", "{{customer_id}}", "charges"],
+							"query": [
+								{ "key": "limit", "value": "20" },
+								{ "key": "offset", "value": "0" }
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Portal Team",
+			"item": [
+				{
+					"name": "List Members",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" }
+						],
+						"url": "{{base_url}}/api/v1/team/members"
+					}
+				},
+				{
+					"name": "List Invitations",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" }
+						],
+						"url": "{{base_url}}/api/v1/team/invitations"
+					}
+				},
+				{
+					"name": "Invite Member",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" },
+							{ "key": "Content-Type", "value": "application/json", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"messageID\": \"{{$guid}}\",\n  \"primaryData\": {\n    \"email\": \"{{invite_email}}\",\n    \"role\": \"developer\"\n  }\n}"
+						},
+						"url": "{{base_url}}/api/v1/team/invite"
+					}
+				},
+				{
+					"name": "Resend Invitation",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" }
+						],
+						"url": "{{base_url}}/api/v1/team/invitations/{{invite_email}}/resend"
+					}
+				},
+				{
+					"name": "Revoke Invitation",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" }
+						],
+						"url": "{{base_url}}/api/v1/team/invitations/{{invite_email}}/revoke"
+					}
+				}
+			]
+		},
+		{
+			"name": "Portal Developer",
+			"item": [
+				{
+					"name": "List API Keys",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"list api keys\", () => {",
+									"    pm.response.to.have.status(200);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" }
+						],
+						"url": "{{base_url}}/api/v1/developer/keys"
+					}
+				},
+				{
+					"name": "Create API Key",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"create api key\", () => {",
+									"    pm.response.to.have.status(200);",
+									"    var json = pm.response.json();",
+									"    var rawKey = json.primaryData.key;",
+									"    pm.expect(rawKey).to.not.be.empty;",
+									"    console.log(\"Save this key: \" + rawKey);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" },
+							{ "key": "Content-Type", "value": "application/json", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"messageID\": \"{{$guid}}\",\n  \"primaryData\": {\n    \"name\": \"Production Key\",\n    \"env\": \"live\",\n    \"type\": \"Secret\"\n  }\n}"
+						},
+						"url": "{{base_url}}/api/v1/developer/keys/create"
+					}
+				},
+				{
+					"name": "List Webhook Endpoints",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" }
+						],
+						"url": "{{base_url}}/api/v1/developer/webhooks"
+					}
+				},
+				{
+					"name": "Create Webhook Endpoint",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" },
+							{ "key": "Content-Type", "value": "application/json", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"messageID\": \"{{$guid}}\",\n  \"primaryData\": {\n    \"url\": \"https://example.com/zia-webhooks\",\n    \"status\": \"active\"\n  }\n}"
+						},
+						"url": "{{base_url}}/api/v1/developer/webhooks/create"
+					}
+				}
+			]
+		},
+		{
+			"name": "Portal Notifications",
+			"item": [
+				{
+					"name": "List Notifications",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" }
+						],
+						"url": "{{base_url}}/api/v1/notifications"
+					}
+				},
+				{
+					"name": "Mark All Read",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" }
+						],
+						"url": "{{base_url}}/api/v1/notifications/mark-all-read"
+					}
+				},
+				{
+					"name": "Update Preferences",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" },
+							{ "key": "Content-Type", "value": "application/json", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"messageID\": \"{{$guid}}\",\n  \"primaryData\": {\n    \"dailyDigest\": true,\n    \"alertOnDisputes\": true,\n    \"weeklyTreasuryReport\": false,\n    \"betaFeatures\": false\n  }\n}"
+						},
+						"url": "{{base_url}}/api/v1/notifications/preferences"
+					}
+				}
+			]
+		},
+		{
+			"name": "Portal Profile",
+			"item": [
+				{
+					"name": "Get Profile",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"get profile\", () => {",
+									"    pm.response.to.have.status(200);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" }
+						],
+						"url": "{{base_url}}/api/v1/profile"
+					}
+				},
+				{
+					"name": "Update Profile",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"update profile\", () => {",
+									"    pm.response.to.have.status(200);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{portal_token}}", "type": "text" },
+							{ "key": "Content-Type", "value": "application/json", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"messageID\": \"{{$guid}}\",\n  \"primaryData\": {\n    \"name\": \"Jane Doe\",\n    \"title\": \"CTO\",\n    \"phone\": \"254712345678\"\n  }\n}"
+						},
+						"url": "{{base_url}}/api/v1/profile/update"
+					}
+				}
+			]
+		},
+		{
+			"name": "Webhook Ingestion",
+			"item": [
+				{
+					"name": "M-Pesa Webhook",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"Body\": {\n    \"stkCallback\": {\n      \"MerchantRequestID\": \"29130-25258464-1\",\n      \"CheckoutRequestID\": \"ws_CO_280720241200000000\",\n      \"ResultCode\": 0,\n      \"ResultDesc\": \"The service request is processed successfully.\",\n      \"CallbackMetadata\": {\n        \"Item\": [\n          { \"Name\": \"Amount\", \"Value\": 15000 },\n          { \"Name\": \"MpesaReceiptNumber\", \"Value\": \"MPS123456\" },\n          { \"Name\": \"TransactionDate\", \"Value\": \"20240728120000\" },\n          { \"Name\": \"PhoneNumber\", \"Value\": 254712345678 }\n        ]\n      }\n    }\n  }\n}"
+						},
+						"url": "{{base_url}}/v1/webhooks/mpesa"
+					}
+				},
+				{
+					"name": "KCB Webhook",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"status\": \"completed\",\n  \"reference\": \"KCB-REF-001\",\n  \"amount\": 15000,\n  \"currency\": \"KES\",\n  \"phone\": \"254712345678\",\n  \"transactionId\": \"TXN001\"\n}"
+						},
+						"url": "{{base_url}}/v1/webhooks/kcb"
+					}
+				},
+				{
+					"name": "Paystack Webhook",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "x-paystack-signature", "value": "sha512=test_signature", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"event\": \"charge.success\",\n  \"data\": {\n    \"id\": 123456,\n    \"status\": \"success\",\n    \"reference\": \"paystack_ref_001\",\n    \"amount\": 1500000,\n    \"currency\": \"KES\",\n    \"customer\": {\n      \"email\": \"buyer@example.com\",\n      \"phone\": \"254712345678\"\n    }\n  }\n}"
+						},
+						"url": "{{base_url}}/v1/webhooks/paystack"
+					}
+				},
+				{
+					"name": "Pesalink Webhook",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"event\": \"transfer.completed\",\n  \"data\": {\n    \"id\": \"psl_txn_001\",\n    \"status\": \"completed\",\n    \"amount\": 500000,\n    \"currency\": \"KES\",\n    \"reference\": \"PSL-REF-001\"\n  }\n}"
+						},
+						"url": "{{base_url}}/v1/webhooks/pesalink"
+					}
+				}
+			]
+		}
+	]
+}

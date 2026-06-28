@@ -10,6 +10,7 @@ type UserRepository interface {
 	Create(ctx context.Context, u *domain.User) error
 	GetByID(ctx context.Context, id string) (*domain.User, error)
 	GetByEmail(ctx context.Context, merchantID, email string) (*domain.User, error)
+	GetByEmailGlobal(ctx context.Context, email string) (*domain.User, error)
 	UpdateProfile(ctx context.Context, id, name, title, phone string) error
 }
 
@@ -33,6 +34,7 @@ type TeamMemberRepository interface {
 
 type TeamInvitationRepository interface {
 	Create(ctx context.Context, inv *domain.TeamInvitation) error
+	Upsert(ctx context.Context, inv *domain.TeamInvitation) error
 	ListByMerchant(ctx context.Context, merchantID string) ([]domain.TeamInvitation, error)
 	GetByEmail(ctx context.Context, merchantID, email string) (*domain.TeamInvitation, error)
 	DeleteByEmail(ctx context.Context, merchantID, email string) error
@@ -85,6 +87,15 @@ func (r *userRepo) GetByEmail(ctx context.Context, merchantID, email string) (*d
 	}
 	return u, nil
 }
+func (r *userRepo) GetByEmailGlobal(ctx context.Context, email string) (*domain.User, error) {
+	u := &domain.User{}
+	err := r.db.QueryRow(ctx, `SELECT id,merchant_id,name,email,password_hash,title,phone,role,created_at FROM users WHERE email=$1 LIMIT 1`, email).
+		Scan(&u.ID, &u.MerchantID, &u.Name, &u.Email, &u.PasswordHash, &u.Title, &u.Phone, &u.Role, &u.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
+}
 func (r *userRepo) UpdateProfile(ctx context.Context, id, name, title, phone string) error {
 	_, err := r.db.Exec(ctx, `UPDATE users SET name=$1,title=$2,phone=$3 WHERE id=$4`, name, title, phone, id)
 	return err
@@ -96,7 +107,12 @@ func (r *sessionRepo) Create(ctx context.Context, s *domain.Session) error {
 }
 func (r *sessionRepo) GetByToken(ctx context.Context, token string) (*domain.Session, error) {
 	s := &domain.Session{}
-	err := r.db.QueryRow(ctx, `SELECT id,user_id,token,expires_at,created_at FROM sessions WHERE token=$1 AND expires_at>now()`, token).Scan(&s.ID, &s.UserID, &s.Token, &s.ExpiresAt, &s.CreatedAt)
+	err := r.db.QueryRow(ctx, `
+		SELECT s.id, s.user_id, u.merchant_id, s.token, s.expires_at, s.created_at
+		FROM sessions s
+		JOIN users u ON u.id = s.user_id
+		WHERE s.token=$1 AND s.expires_at>now()`, token).
+		Scan(&s.ID, &s.UserID, &s.MerchantID, &s.Token, &s.ExpiresAt, &s.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -182,6 +198,16 @@ func (r *teamMemberRepo) GetByEmail(ctx context.Context, merchantID, email strin
 
 func (r *teamInvitationRepo) Create(ctx context.Context, inv *domain.TeamInvitation) error {
 	_, err := r.db.Exec(ctx, `INSERT INTO team_invitations (id,merchant_id,email,role,token,expires_at,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`, inv.ID, inv.MerchantID, inv.Email, inv.Role, inv.Token, inv.ExpiresAt, inv.CreatedAt)
+	return err
+}
+func (r *teamInvitationRepo) Upsert(ctx context.Context, inv *domain.TeamInvitation) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO team_invitations (id,merchant_id,email,role,token,expires_at,created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (merchant_id, email) DO UPDATE SET
+			role=EXCLUDED.role, token=EXCLUDED.token,
+			expires_at=EXCLUDED.expires_at, created_at=EXCLUDED.created_at`,
+		inv.ID, inv.MerchantID, inv.Email, inv.Role, inv.Token, inv.ExpiresAt, inv.CreatedAt)
 	return err
 }
 func (r *teamInvitationRepo) ListByMerchant(ctx context.Context, merchantID string) ([]domain.TeamInvitation, error) {

@@ -13,6 +13,7 @@ type MerchantRepository interface {
 	ListAll(ctx context.Context) ([]domain.Merchant, error)
 	UpdateSettlementConfig(ctx context.Context, id string, config []byte) error
 	CreateAPIKey(ctx context.Context, k *domain.APIKey) error
+	ListAPIKeys(ctx context.Context, merchantID string) ([]domain.APIKey, error)
 	GetAPIKeyByHash(ctx context.Context, hash string) (*domain.APIKey, error)
 	GetAPIKeyByPrefix(ctx context.Context, prefix string) (*domain.APIKey, error)
 }
@@ -78,10 +79,29 @@ func (r *merchantRepo) ListAll(ctx context.Context) ([]domain.Merchant, error) {
 
 func (r *merchantRepo) CreateAPIKey(ctx context.Context, k *domain.APIKey) error {
 	_, err := r.db.Exec(ctx, `
-		INSERT INTO api_keys (id, merchant_id, key_hash, key_prefix, environment, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6)`,
-		k.ID, k.MerchantID, k.KeyHash, k.KeyPrefix, k.Environment, k.CreatedAt)
+		INSERT INTO api_keys (id, merchant_id, name, key_hash, key_prefix, environment, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		k.ID, k.MerchantID, k.Name, k.KeyHash, k.KeyPrefix, k.Environment, k.CreatedAt)
 	return err
+}
+
+func (r *merchantRepo) ListAPIKeys(ctx context.Context, merchantID string) ([]domain.APIKey, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT id, merchant_id, name, key_hash, key_prefix, environment, created_at
+		FROM api_keys WHERE merchant_id=$1 ORDER BY created_at DESC`, merchantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var keys []domain.APIKey
+	for rows.Next() {
+		var k domain.APIKey
+		if err := rows.Scan(&k.ID, &k.MerchantID, &k.Name, &k.KeyHash, &k.KeyPrefix, &k.Environment, &k.CreatedAt); err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	return keys, nil
 }
 
 func (r *merchantRepo) GetAPIKeyByHash(ctx context.Context, hash string) (*domain.APIKey, error) {

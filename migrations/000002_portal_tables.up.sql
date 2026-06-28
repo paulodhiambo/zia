@@ -89,3 +89,5 @@ CREATE TABLE notifications (
 );
 
 CREATE INDEX idx_notifications_merchant ON notifications(merchant_id);
+
+ALTER TABLE api_keys ADD COLUMN name TEXT NOT NULL DEFAULT '';

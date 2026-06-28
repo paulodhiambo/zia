@@ -15,11 +15,12 @@ type User struct {
 }
 
 type Session struct {
-	ID        string    `db:"id" json:"-"`
-	UserID    string    `db:"user_id" json:"-"`
-	Token     string    `db:"token" json:"token"`
-	ExpiresAt time.Time `db:"expires_at" json:"expiresAt"`
-	CreatedAt time.Time `db:"created_at" json:"-"`
+	ID         string    `db:"id" json:"-"`
+	UserID     string    `db:"user_id" json:"-"`
+	MerchantID string    `db:"merchant_id" json:"-"`
+	Token      string    `db:"token" json:"token"`
+	ExpiresAt  time.Time `db:"expires_at" json:"expiresAt"`
+	CreatedAt  time.Time `db:"created_at" json:"-"`
 }
 
 type Customer struct {

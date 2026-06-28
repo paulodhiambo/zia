@@ -22,6 +22,7 @@ type Merchant struct {
 type APIKey struct {
 	ID          string    `db:"id" json:"id"`
 	MerchantID  string    `db:"merchant_id" json:"merchantId"`
+	Name        string    `db:"name" json:"name"`
 	KeyHash     string    `db:"key_hash" json:"-"`
 	KeyPrefix   string    `db:"key_prefix" json:"keyPrefix"`
 	Environment string    `db:"environment" json:"environment"`
