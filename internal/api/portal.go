@@ -1,15 +1,19 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"zia/internal/domain"
@@ -22,19 +26,98 @@ import (
 )
 
 type PortalHandler struct {
-	userRepo        repository.UserRepository
-	sessionRepo     repository.SessionRepository
-	merchantRepo    repository.MerchantRepository
-	piRepo          repository.PaymentIntentRepository
-	payoutRepo      repository.PayoutRepository
-	ledgerRepo      repository.LedgerRepository
-	customerRepo    repository.CustomerRepository
-	teamMemberRepo  repository.TeamMemberRepository
-	teamInviteRepo  repository.TeamInvitationRepository
-	webhookEPRepo   repository.WebhookEndpointRepository
+	userRepo         repository.UserRepository
+	sessionRepo      repository.SessionRepository
+	merchantRepo     repository.MerchantRepository
+	piRepo           repository.PaymentIntentRepository
+	payoutRepo       repository.PayoutRepository
+	ledgerRepo       repository.LedgerRepository
+	customerRepo     repository.CustomerRepository
+	teamMemberRepo   repository.TeamMemberRepository
+	teamInviteRepo   repository.TeamInvitationRepository
+	webhookEPRepo    repository.WebhookEndpointRepository
 	webhookEventRepo repository.WebhookEventRepository
-	notifRepo       repository.NotificationRepository
-	logger          *zap.Logger
+	notifRepo        repository.NotificationRepository
+	otpStore         *otpStore
+	smsSender        *smsSender
+	logger           *zap.Logger
+}
+
+type otpEntry struct {
+	code      string
+	expiresAt time.Time
+	data      *signupData
+}
+
+type otpStore struct {
+	mu sync.Mutex
+	m  map[string]*otpEntry
+}
+
+func newOTPStore() *otpStore {
+	return &otpStore{m: make(map[string]*otpEntry)}
+}
+
+func (s *otpStore) set(phone, code string, data *signupData) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[phone] = &otpEntry{code: code, expiresAt: time.Now().Add(10 * time.Minute), data: data}
+}
+
+func (s *otpStore) get(phone string) *otpEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := s.m[phone]
+	if e == nil {
+		return nil
+	}
+	if time.Now().After(e.expiresAt) {
+		delete(s.m, phone)
+		return nil
+	}
+	return e
+}
+
+func (s *otpStore) delete(phone string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.m, phone)
+}
+
+type smsSender struct {
+	apiToken string
+	senderID string
+	client   *http.Client
+}
+
+func newSMSSender(apiToken, senderID string) *smsSender {
+	return &smsSender{apiToken: apiToken, senderID: senderID, client: &http.Client{Timeout: 10 * time.Second}}
+}
+
+func (s *smsSender) send(recipient, message string) error {
+	body, _ := json.Marshal(map[string]string{
+		"recipient": recipient,
+		"sender_id": s.senderID,
+		"type":      "plain",
+		"message":   message,
+	})
+	req, err := http.NewRequest("POST", "https://opensms.co.ke/api/v3/sms/send", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.apiToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("sms send failed (%d): %s", resp.StatusCode, string(b))
+	}
+	return nil
 }
 
 type portalCtxKey string
@@ -83,6 +166,13 @@ func NewPortalHandler(
 	notifRepo repository.NotificationRepository,
 	logger *zap.Logger,
 ) *PortalHandler {
+	otpS := newOTPStore()
+	smsTok := os.Getenv("SMS_API_TOKEN")
+	smsSenderID := os.Getenv("SMS_SENDER_ID")
+	var sms *smsSender
+	if smsTok != "" && smsSenderID != "" {
+		sms = newSMSSender(smsTok, smsSenderID)
+	}
 	return &PortalHandler{
 		userRepo:         userRepo,
 		sessionRepo:      sessionRepo,
@@ -96,6 +186,8 @@ func NewPortalHandler(
 		webhookEPRepo:    webhookEPRepo,
 		webhookEventRepo: webhookEventRepo,
 		notifRepo:        notifRepo,
+		otpStore:         otpS,
+		smsSender:        sms,
 		logger:           logger,
 	}
 }
@@ -150,6 +242,13 @@ func (h *PortalHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	merchant, err := h.merchantRepo.GetByID(r.Context(), user.MerchantID)
+	if err != nil {
+		h.logger.Error("merchant lookup", zap.Error(err))
+		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
+		return
+	}
+
 	respond(w, r, http.StatusOK, map[string]any{
 		"token": session.Token,
 		"user": map[string]string{
@@ -159,7 +258,85 @@ func (h *PortalHandler) Login(w http.ResponseWriter, r *http.Request) {
 			"role":  user.Role,
 			"title": user.Title,
 		},
+		"workspace": map[string]any{
+			"id":              merchant.ID,
+			"code":            merchant.Code,
+			"legalName":       merchant.LegalName,
+			"country":         merchant.Country,
+			"defaultCurrency": merchant.DefaultCurrency,
+			"status":          merchant.Status,
+			"createdAt":       merchant.CreatedAt,
+		},
+		"merchant": map[string]any{
+			"id":              merchant.ID,
+			"code":            merchant.Code,
+			"legalName":       merchant.LegalName,
+			"country":         merchant.Country,
+			"defaultCurrency": merchant.DefaultCurrency,
+			"status":          merchant.Status,
+			"createdAt":       merchant.CreatedAt,
+		},
 	})
+}
+
+type signupData struct {
+	Name     string
+	Role     string
+	Email    string
+	Company  string
+	Country  string
+	Currency string
+	Phone    string
+	Password string
+}
+
+func (h *PortalHandler) SendOTP(w http.ResponseWriter, r *http.Request) {
+	var env RequestEnvelope
+	if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
+		respondPortalError(w, r, http.StatusBadRequest, "1001", "Invalid request")
+		return
+	}
+	var data struct {
+		Phone    string `json:"phone"`
+		Name     string `json:"name"`
+		Role     string `json:"role"`
+		Email    string `json:"email"`
+		Company  string `json:"company"`
+		Country  string `json:"country"`
+		Currency string `json:"currency"`
+		Password string `json:"password"`
+	}
+	if err := json.Unmarshal(env.PrimaryData, &data); err != nil || data.Phone == "" {
+		respondPortalError(w, r, http.StatusBadRequest, "1001", "Phone is required")
+		return
+	}
+
+	if h.otpStore.get(data.Phone) != nil {
+		respondPortalError(w, r, http.StatusTooManyRequests, "1001", "OTP already sent, please wait")
+		return
+	}
+
+	code := fmt.Sprintf("%06d", otpCode())
+
+	sd := &signupData{
+		Name:     data.Name,
+		Role:     data.Role,
+		Email:    data.Email,
+		Company:  data.Company,
+		Country:  data.Country,
+		Currency: data.Currency,
+		Phone:    data.Phone,
+		Password: data.Password,
+	}
+	h.otpStore.set(data.Phone, code, sd)
+
+	if h.smsSender != nil {
+		go h.smsSender.send(data.Phone, "Your verification code is: "+code)
+	} else {
+		h.logger.Info("OTP (no SMS sender configured)", zap.String("phone", data.Phone), zap.String("code", code))
+	}
+
+	respond(w, r, http.StatusOK, map[string]bool{"success": true})
 }
 
 func (h *PortalHandler) Signup(w http.ResponseWriter, r *http.Request) {
@@ -175,14 +352,16 @@ func (h *PortalHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		Company  string `json:"company"`
 		Country  string `json:"country"`
 		Currency string `json:"currency"`
+		Phone    string `json:"phone"`
 		Password string `json:"password"`
+		Otp      string `json:"otp"`
 	}
 	if err := json.Unmarshal(env.PrimaryData, &data); err != nil {
 		respondPortalError(w, r, http.StatusBadRequest, "1001", "Invalid signup data")
 		return
 	}
-	if data.Name == "" || data.Email == "" || data.Password == "" {
-		respondPortalError(w, r, http.StatusBadRequest, "1001", "Name, email and password are required")
+	if data.Name == "" || data.Email == "" || data.Password == "" || data.Phone == "" || data.Otp == "" {
+		respondPortalError(w, r, http.StatusBadRequest, "1001", "Name, email, password, phone and otp are required")
 		return
 	}
 	if data.Country == "" {
@@ -192,9 +371,27 @@ func (h *PortalHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		data.Currency = "KES"
 	}
 
+	entry := h.otpStore.get(data.Phone)
+	if entry == nil || entry.code != data.Otp {
+		respondPortalError(w, r, http.StatusBadRequest, "1001", "Invalid or expired OTP")
+		return
+	}
+	if entry.data != nil && entry.data.Phone != data.Phone {
+		respondPortalError(w, r, http.StatusBadRequest, "1001", "Phone mismatch")
+		return
+	}
+	h.otpStore.delete(data.Phone)
+
 	merchantID := uuid.New().String()
+	merchantCode, err := generateMerchantCode()
+	if err != nil {
+		h.logger.Error("generate merchant code", zap.Error(err))
+		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
+		return
+	}
 	if err := h.merchantRepo.Create(r.Context(), &domain.Merchant{
 		ID:              merchantID,
+		Code:            merchantCode,
 		LegalName:       data.Company,
 		Country:         data.Country,
 		DefaultCurrency: data.Currency,
@@ -216,6 +413,7 @@ func (h *PortalHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		MerchantID:   merchantID,
 		Name:         data.Name,
 		Email:        data.Email,
+		Phone:        data.Phone,
 		PasswordHash: string(hash),
 		Role:         data.Role,
 		Title:        data.Role,
@@ -227,7 +425,10 @@ func (h *PortalHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respond(w, r, http.StatusOK, map[string]bool{"success": true})
+	respond(w, r, http.StatusOK, map[string]any{
+		"success":      true,
+		"merchantCode": merchantCode,
+	})
 }
 
 func (h *PortalHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
@@ -253,6 +454,12 @@ func (h *PortalHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 func (h *PortalHandler) DashboardOverview(w http.ResponseWriter, r *http.Request) {
 	merchantID := h.getMerchantID(r)
 
+	merchant, err := h.merchantRepo.GetByID(r.Context(), merchantID)
+	if err != nil {
+		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
+		return
+	}
+
 	pis, _ := h.piRepo.ListByMerchant(r.Context(), merchantID, 500, 0)
 
 	todayStart := time.Now().UTC().Truncate(24 * time.Hour)
@@ -277,6 +484,7 @@ func (h *PortalHandler) DashboardOverview(w http.ResponseWriter, r *http.Request
 	}
 
 	respond(w, r, http.StatusOK, map[string]any{
+		"merchantCode":       merchant.Code,
 		"treasuryBalance":    float64(available) / 100.0,
 		"todayVolume":        float64(todayVolume) / 100.0,
 		"successfulPayments": successCount,
@@ -933,7 +1141,12 @@ func (h *PortalHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 		respondPortalError(w, r, http.StatusNotFound, "1003", "User not found")
 		return
 	}
-	respond(w, r, http.StatusOK, buildProfileResponse(user))
+	merchant, err := h.merchantRepo.GetByID(r.Context(), user.MerchantID)
+	if err != nil {
+		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
+		return
+	}
+	respond(w, r, http.StatusOK, buildProfileResponse(user, merchant))
 }
 
 func (h *PortalHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
@@ -962,7 +1175,12 @@ func (h *PortalHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
 		return
 	}
-	respond(w, r, http.StatusOK, buildProfileResponse(user))
+	merchant, err := h.merchantRepo.GetByID(r.Context(), user.MerchantID)
+	if err != nil {
+		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
+		return
+	}
+	respond(w, r, http.StatusOK, buildProfileResponse(user, merchant))
 }
 
 // --- helpers ---
@@ -983,8 +1201,26 @@ func formatCustomer(c *domain.Customer) map[string]any {
 	}
 }
 
-func buildProfileResponse(user *domain.User) map[string]any {
+func buildProfileResponse(user *domain.User, merchant *domain.Merchant) map[string]any {
 	return map[string]any{
+		"workspace": map[string]any{
+			"id":              merchant.ID,
+			"code":            merchant.Code,
+			"legalName":       merchant.LegalName,
+			"country":         merchant.Country,
+			"defaultCurrency": merchant.DefaultCurrency,
+			"status":          merchant.Status,
+			"createdAt":       merchant.CreatedAt,
+		},
+		"merchant": map[string]any{
+			"id":              merchant.ID,
+			"code":            merchant.Code,
+			"legalName":       merchant.LegalName,
+			"country":         merchant.Country,
+			"defaultCurrency": merchant.DefaultCurrency,
+			"status":          merchant.Status,
+			"createdAt":       merchant.CreatedAt,
+		},
 		"user": map[string]string{
 			"id":    user.ID,
 			"name":  user.Name,
@@ -1060,6 +1296,26 @@ func deepMerge(dst, src map[string]any) {
 
 func respondPortalError(w http.ResponseWriter, r *http.Request, httpStatus int, code, msg string) {
 	respondError(w, r, httpStatus, code, msg)
+}
+
+func otpCode() int {
+	var b [2]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return 123456
+	}
+	return 100000 + (int(b[0])<<8|int(b[1]))%900000
+}
+
+func generateMerchantCode() (string, error) {
+	const charset = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	for i := range b {
+		b[i] = charset[int(b[i])%len(charset)]
+	}
+	return "M-" + string(b), nil
 }
 
 
