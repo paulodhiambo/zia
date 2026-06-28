@@ -142,10 +142,18 @@ type updateSettingsRequest struct {
 func (h *MerchantHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	merchantID := r.Context().Value(authn.MerchantIDKey).(string)
 
-	var req updateSettingsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var env RequestEnvelope
+	if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
 		respondValidationError(w, r, []FieldError{
 			{Field: "body", Message: "invalid JSON"},
+		})
+		return
+	}
+
+	var req updateSettingsRequest
+	if err := json.Unmarshal(env.PrimaryData, &req); err != nil {
+		respondValidationError(w, r, []FieldError{
+			{Field: "primaryData", Message: "invalid payload"},
 		})
 		return
 	}

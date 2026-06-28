@@ -222,7 +222,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"webhookUrl\": \"https://example.com/zia-webhooks\"\n}"
+							"raw": "{\n  \"messageID\": \"{{$guid}}\",\n  \"primaryData\": {\n    \"webhookUrl\": \"https://example.com/zia-webhooks\"\n  }\n}"
 						},
 						"url": "{{base_url}}/v1/merchant/settings"
 					}
@@ -256,7 +256,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"amountMinor\": 5000,\n  \"currency\": \"KES\",\n  \"customerEmail\": \"buyer@example.com\",\n  \"customerPhone\": \"254712345678\",\n  \"callbackUrl\": \"https://example.com/checkout-callback\"\n}"
+							"raw": "{\n  \"messageID\": \"{{$guid}}\",\n  \"primaryData\": {\n    \"amountMinor\": 5000,\n    \"currency\": \"KES\",\n    \"customerEmail\": \"buyer@example.com\",\n    \"customerPhone\": \"254712345678\",\n    \"callbackUrl\": \"https://example.com/checkout-callback\"\n  }\n}"
 						},
 						"url": "{{base_url}}/v1/checkout"
 					}
