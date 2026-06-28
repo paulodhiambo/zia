@@ -13,10 +13,8 @@ import (
 	"zia/internal/api"
 	"zia/internal/authn"
 	"zia/internal/connector"
-	"zia/internal/connector/kcb"
 	"zia/internal/connector/mpesa"
 	"zia/internal/connector/paystack"
-	"zia/internal/connector/pesalink"
 	"zia/internal/idempotency"
 	"zia/internal/ledger"
 	"zia/internal/notification"
@@ -150,19 +148,10 @@ func main() {
 		registry.Register("mpesa", mpesa.New(cfg, logger))
 		logger.Info("registered mpesa connector")
 	}
-	if cfg := kcb.ConfigFromEnv(); cfg.ConsumerKey != "" {
-		registry.Register("kcb", kcb.New(cfg))
-		logger.Info("registered kcb connector")
-	}
 	if cfg := paystack.ConfigFromEnv(); cfg.SecretKey != "" {
 		registry.Register("paystack", paystack.New(cfg))
 		logger.Info("registered paystack connector")
 	}
-	if cfg := pesalink.ConfigFromEnv(); cfg.APIKey != "" {
-		registry.Register("pesalink", pesalink.New(cfg))
-		logger.Info("registered pesalink connector")
-	}
-
 	dedupStore := webhook.NewDedupStore(rdb)
 
 	nc, err := nats.Connect(cfg.natsURL)
@@ -176,7 +165,7 @@ func main() {
 
 	var notifDispatcher *notification.Dispatcher
 	if js != nil {
-		notifDispatcher = notification.NewDispatcher(merchantRepo, js, logger)
+		notifDispatcher = notification.NewDispatcher(merchantRepo, notifRepo, js, logger)
 	}
 
 	feePercent, _ := strconv.Atoi(os.Getenv("PLATFORM_FEE_PERCENT"))
@@ -214,7 +203,7 @@ func main() {
 	checkoutHandler := api.NewCheckoutHandler(piSvc, checkoutRepo, piRepo, logger)
 	portalHandler := api.NewPortalHandler(
 		userRepo, sessionRepo, merchantRepo, piRepo, payoutRepo, ledRepo,
-		customerRepo, teamMemberRepo, teamInviteRepo, webhookEPRepo, notifRepo, logger,
+		customerRepo, teamMemberRepo, teamInviteRepo, webhookEPRepo, whRepo, notifRepo, logger,
 	)
 	authMiddleware := authn.Middleware(merchantRepo)
 	sessionMiddleware := api.PortalAuth(sessionRepo)

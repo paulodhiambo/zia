@@ -15,7 +15,4 @@ data:
   OO_SAMPLE_RATE: {{ .Values.config.ooSampleRate | quote }}
   MPESA_SHORTCODE: {{ .Values.config.mpesaShortCode | quote }}
   MPESA_CALLBACK_BASE_URL: {{ .Values.config.mpesaCallbackBaseURL | quote }}
-  KCB_ORG_SHORTCODE: {{ .Values.config.kcbOrgShortCode | quote }}
-  KCB_CALLBACK_URL: {{ .Values.config.kcbCallbackURL | quote }}
-  PESALINK_CALLBACK_URL: {{ .Values.config.pesalinkCallbackURL | quote }}
-  PESALINK_PARTNER_ID: {{ .Values.config.pesalinkPartnerID | quote }}
+

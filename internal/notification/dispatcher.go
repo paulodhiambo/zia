@@ -11,6 +11,7 @@ import (
 	"zia/internal/domain"
 	"zia/internal/repository"
 
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -23,14 +24,16 @@ type SettlementConfig struct {
 
 type Dispatcher struct {
 	merchantRepo repository.MerchantRepository
+	notifRepo    repository.NotificationRepository
 	http         *http.Client
 	js           nats.JetStreamContext
 	logger       *zap.Logger
 }
 
-func NewDispatcher(merchantRepo repository.MerchantRepository, js nats.JetStreamContext, logger *zap.Logger) *Dispatcher {
+func NewDispatcher(merchantRepo repository.MerchantRepository, notifRepo repository.NotificationRepository, js nats.JetStreamContext, logger *zap.Logger) *Dispatcher {
 	return &Dispatcher{
 		merchantRepo: merchantRepo,
+		notifRepo:    notifRepo,
 		http:         &http.Client{Timeout: 15 * time.Second},
 		js:           js,
 		logger:       logger,
@@ -135,22 +138,59 @@ func (d *Dispatcher) processNotification(ctx context.Context, evt NotificationEv
 		return fmt.Errorf("lookup merchant %s: %w", evt.MerchantID, err)
 	}
 
+	n := d.notificationFromEvent(evt)
+	if err := d.notifRepo.Create(ctx, n); err != nil {
+		d.logger.Error("failed to persist notification", zap.String("pi_id", evt.PIID), zap.Error(err))
+	}
+
 	webhookURL := webhookURLFromConfig(merchant)
 	if webhookURL == "" {
 		return nil
 	}
 
 	payload, _ := json.Marshal(map[string]any{
-		"event":     evt.EventType,
-		"pi_id":    evt.PIID,
-		"amount":   evt.AmountMinor,
-		"currency": evt.Currency,
-		"psp":      evt.PSPReference,
-		"status":   evt.Status,
-		"timestamp": evt.Timestamp,
+		"event":      evt.EventType,
+		"pi_id":      evt.PIID,
+		"amount":     evt.AmountMinor,
+		"currency":   evt.Currency,
+		"psp":        evt.PSPReference,
+		"status":     evt.Status,
+		"timestamp":  evt.Timestamp,
 	})
 
 	return d.sendWithRetry(ctx, webhookURL, payload)
+}
+
+func (d *Dispatcher) notificationFromEvent(evt NotificationEvent) *domain.Notification {
+	var tone, title, body, category string
+	switch {
+	case evt.Status == "succeeded":
+		tone = "success"
+		title = "Payment Successful"
+		body = fmt.Sprintf("%s payment of %d %s was successful", evt.PSP, evt.AmountMinor, evt.Currency)
+		category = "payment"
+	case evt.Status == "failed":
+		tone = "error"
+		title = "Payment Failed"
+		body = fmt.Sprintf("%s payment of %d %s failed", evt.PSP, evt.AmountMinor, evt.Currency)
+		category = "payment"
+	default:
+		tone = "info"
+		title = fmt.Sprintf("Payment %s", evt.Status)
+		body = fmt.Sprintf("%s payment of %d %s is %s", evt.PSP, evt.AmountMinor, evt.Currency, evt.Status)
+		category = "payment"
+	}
+
+	return &domain.Notification{
+		ID:         uuid.New().String(),
+		MerchantID: evt.MerchantID,
+		Tone:       tone,
+		Title:      title,
+		Body:       body,
+		Category:   category,
+		Unread:     true,
+		CreatedAt:  time.Now().UTC(),
+	}
 }
 
 func (d *Dispatcher) sendWithRetry(ctx context.Context, url string, payload []byte) error {

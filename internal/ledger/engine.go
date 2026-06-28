@@ -242,8 +242,6 @@ func pspClearingAccount(psp string) string {
 	switch psp {
 	case "mpesa":
 		return AccountPSPClearingMpesa
-	case "kcb":
-		return AccountPSPClearingKCB
 	case "paystack":
 		return AccountPSPClearingPaystack
 	default:

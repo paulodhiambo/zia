@@ -1,8 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -11,13 +14,51 @@ import (
 
 type ctxKey string
 
-const reqIDKey ctxKey = "req_id"
+const (
+	reqIDKey          ctxKey = "req_id"
+	conversationIDKey ctxKey = "conversation_id"
+)
 
 func GetReqID(ctx context.Context) string {
 	if id, ok := ctx.Value(reqIDKey).(string); ok {
 		return id
 	}
 	return ""
+}
+
+func GetConversationID(ctx context.Context) *string {
+	if id, ok := ctx.Value(conversationIDKey).(string); ok && id != "" {
+		return &id
+	}
+	return nil
+}
+
+// ConversationID extracts the conversationID from the JSON request body and
+// stores it in the context so respond helpers can echo it back.
+func ConversationID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body == nil || r.ContentLength == 0 {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+
+		var partial struct {
+			ConversationID *string `json:"conversationID"`
+		}
+		if err := json.Unmarshal(body, &partial); err == nil && partial.ConversationID != nil {
+			ctx := context.WithValue(r.Context(), conversationIDKey, *partial.ConversationID)
+			r = r.WithContext(ctx)
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 func RequestID(next http.Handler) http.Handler {

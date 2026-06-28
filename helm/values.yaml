@@ -9,10 +9,7 @@ config:
   ooSampleRate: "1.0"
   mpesaShortCode: ""
   mpesaCallbackBaseURL: ""
-  kcbOrgShortCode: ""
-  kcbCallbackURL: ""
-  pesalinkCallbackURL: ""
-  pesalinkPartnerID: ""
+
 
 # Sensitive credentials — rendered into a Secret.
 # Set secret.existingSecret to the name of a pre-existing Secret (e.g. managed by
@@ -29,13 +26,9 @@ secret:
   mpesaPassKey: ""
   mpesaB2cInitiatorName: ""
   mpesaB2cSecurityCredential: ""
-  kcbConsumerKey: ""
-  kcbConsumerSecret: ""
   paystackSecretKey: ""
   paystackPublicKey: ""
   paystackWebhookKey: ""
-  pesalinkApiKey: ""
-  pesalinkApiSecret: ""
 
 replicaCount: 2
 

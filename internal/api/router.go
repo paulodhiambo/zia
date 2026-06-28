@@ -26,6 +26,7 @@ func NewRouter(deps Dependencies) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(RequestID)
+	r.Use(ConversationID)
 	r.Use(Logger(deps.Logger))
 	r.Use(Recoverer(deps.Logger))
 
@@ -77,8 +78,10 @@ func NewRouter(deps Dependencies) http.Handler {
 				auth.Post("/developer/keys/create", deps.PortalHandler.CreateAPIKey)
 				auth.Get("/developer/webhooks", deps.PortalHandler.ListWebhookEndpoints)
 				auth.Post("/developer/webhooks/create", deps.PortalHandler.CreateWebhookEndpoint)
+				auth.Get("/developer/webhooks/events", deps.PortalHandler.ListWebhookEvents)
 				auth.Get("/notifications", deps.PortalHandler.ListNotifications)
 				auth.Post("/notifications/mark-all-read", deps.PortalHandler.MarkAllNotificationsRead)
+				auth.Get("/notifications/preferences", deps.PortalHandler.GetNotificationPreferences)
 				auth.Post("/notifications/preferences", deps.PortalHandler.UpdateNotificationPreferences)
 				auth.Get("/profile", deps.PortalHandler.GetProfile)
 				auth.Post("/profile/update", deps.PortalHandler.UpdateProfile)

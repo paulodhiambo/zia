@@ -187,5 +187,5 @@ func (r *Runner) selectRail(m domain.Merchant) string {
 			}
 		}
 	}
-	return "pesalink"
+	return ""
 }

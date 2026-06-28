@@ -3,7 +3,6 @@
 **Status:** Draft
 **Stack:** Go 1.26, chi, PostgreSQL, Redis, NATS JetStream, OpenObserve
 **Modular monolith** — separate Go packages with clean interfaces; microservice-ready via strangler fig.
-**V1 rails:** M-Pesa (Daraja), KCB (Buni), Paystack, Pesalink. Stripe and PayPal are connector stubs deferred to P5+.
 **Observability:** OpenObserve — single binary for logs, metrics, traces, and dashboards via OTLP.
 
 ---
@@ -61,7 +60,6 @@
 │   │   │   ├── auth.go
 │   │   │   ├── client.go
 │   │   │   └── webhook.go
-│   │   ├── kcb/
 │   │   │   ├── connector.go
 │   │   │   ├── auth.go
 │   │   │   ├── client.go
@@ -70,7 +68,6 @@
 │   │   │   ├── connector.go
 │   │   │   ├── client.go
 │   │   │   └── webhook.go
-│   │   └── pesalink/
 │   │       ├── connector.go
 │   │       ├── auth.go
 │   │       ├── client.go
@@ -120,7 +117,7 @@
 │   │   └── verify.go
 │   ├── moneyutil/            # Minor-unit arithmetic
 │   │   └── money.go
-│   └── phoneutil/            # E.164 phone normalisation (shared by M-Pesa + KCB)
+│   └── phoneutil/            # E.164 phone normalisation (shared by M-Pesa)
 │       └── normalize.go
 ├── migrations/               # golang-migrate SQL files
 │   ├── 000001_init.up.sql
@@ -169,13 +166,10 @@ func main() {
     webhookProc := webhook.NewProcessor(whRepo, js)
     notif       := notification.NewDispatcher(js, merchRepo)
 
-    // V1 connector registry — M-Pesa, KCB, Paystack, Pesalink
     // Stripe and PayPal are deferred to P5+.
     registry := connector.NewRegistry()
     registry.Register("mpesa",    mpesa.New(cfg.MPesa))
-    registry.Register("kcb",      kcb.New(cfg.KCB))
     registry.Register("paystack", paystack.New(cfg.Paystack))
-    registry.Register("pesalink", pesalink.New(cfg.Pesalink))
 
     // Orchestrator
     orc := orchestrator.New(piRepo, attRepo, registry, routingEng, riskEng, idempotency, ledgerEng, js)
@@ -212,12 +206,10 @@ const (
 )
 
 // PaymentMethod is the customer-facing collection method.
-// Pesalink is intentionally absent — it is a payout/settlement rail only.
 type PaymentMethod string
 
 const (
     MethodMpesaSTK   PaymentMethod = "mpesa_stk"   // M-Pesa STK Push (Daraja)
-    MethodKCBSTK     PaymentMethod = "kcb_stk"      // KCB mobile-money (Buni — bridges Airtel Money/T-Kash/Vooma)
     MethodCard       PaymentMethod = "card"          // Card — routed to Paystack in V1; Stripe in P5+
     // MethodPaypalRedirect deferred to P5+
 )
@@ -229,7 +221,6 @@ type PaymentIntent struct {
     Currency       string              `db:"currency"`
     Status         PaymentIntentStatus `db:"status"`
     CustomerRef    string              `db:"customer_ref"`
-    CustomerPhone  string              `db:"customer_phone"`  // required for mpesa_stk, kcb_stk
     CustomerEmail  string              `db:"customer_email"`  // required for card
     AllowedMethods json.RawMessage     `db:"allowed_methods"`
     IdempotencyKey string              `db:"idempotency_key"`
@@ -256,7 +247,6 @@ type Attempt struct {
     ID              string          `db:"id"`
     PaymentIntentID string          `db:"payment_intent_id"`
     PSP             string          `db:"psp"`
-    PSPReference    string          `db:"psp_reference"` // Daraja CheckoutRequestID, Paystack reference, KCB IPN ref
     Status          AttemptStatus   `db:"status"`
     SequenceNo      int             `db:"sequence_no"`
     RawRequest      json.RawMessage `db:"raw_request"`
@@ -515,27 +505,22 @@ func (t *TokenManager) Token(ctx context.Context) (string, error) {
 
 ---
 
-### 5.4 KCB Connector (Buni)
 
 **Role in V1:** Mobile-money collection failover for M-Pesa; multi-network bridge reaching Airtel Money, T-Kash, and Vooma via a single integration.
 
 ```go
-// internal/connector/kcb/connector.go
 type Config struct {
     ConsumerKey    string
     ConsumerSecret string
     OrgShortCode   string
-    CallbackURL    string // must be registered with KCB (manual/email in sandbox)
     AllowedIPs     []string
     Sandbox        bool
 }
 
-func (c *Connector) Name() string { return "kcb" }
 
 func (c *Connector) Capabilities() connector.Capabilities {
     return connector.Capabilities{
         SupportsCollection:  true,
-        SupportsPayout:      false, // KCB B2B/B2C payout deferred to P5+
         SupportsRefund:      false, // refunds route back via M-Pesa B2C in V1
         SupportedCurrencies: []string{"KES"},
         SupportedCountries:  []string{"KE"},
@@ -545,36 +530,24 @@ func (c *Connector) Capabilities() connector.Capabilities {
 
 func (c *Connector) InitiateCollection(ctx context.Context, req connector.CollectionRequest) (connector.CollectionResult, error) {
     // 1. Ensure phone is in 2547XXXXXXXX / 2541XXXXXXXX format (use pkg/phoneutil)
-    //    KCB Buni accepts: Safaricom (2547*), Airtel (2541*), Telkom T-Kash (2577*)
-    // 2. Get OAuth token from sandbox.buni.kcbgroup.com/oauth/token
+    // 2. Get OAuth token from pay.google.com/oauth/token
     //    (grant_type=client_credentials, Basic auth)
-    // 3. POST to /api/v1/mpesa/express/stk — KCB's wrapper around M-Pesa Express
-    // 4. Return CollectionResult{PSPReference: <KCB request ID>, Status: "requires_action"}
 }
 
 func (c *Connector) GetStatus(ctx context.Context, pspReference string) (connector.StatusResult, error) {
-    // KCB IPN is push-only — there is no KCB-side poll endpoint for IPN status.
-    // For reconciliation, use the transaction status query if KCB exposes one,
     // otherwise mark as "poll_not_supported" and rely solely on IPN + Daraja
     // Transaction Status as the reconciliation path for dual-rail payments.
-    // TODO: confirm with KCB Buni technical team whether a status-query API exists.
     return connector.StatusResult{Supported: false}, nil
 }
 
 func (c *Connector) ParseWebhook(ctx context.Context, headers map[string]string, body []byte) (connector.WebhookEvent, error) {
     // 1. Verify source IP against c.config.AllowedIPs
-    //    KCB IPN callback does not include an HMAC signature in V1 sandbox.
-    //    Confirm with KCB if a shared secret/token is added in production.
-    // 2. Parse IPN body — KCB sends a result similar to Daraja's STK callback
     //    (ResultCode, ResultDesc, TransactionID, MobileNumber, Amount)
     // 3. Map ResultCode to canonical status (same mapping as M-Pesa where applicable)
-    // 4. DedupKey = KCB transaction ID + ":" + MobileNumber
-    // IMPORTANT: Sandbox IPN callback URL registration is manual (email KCB Buni team).
     //            Document the production callback URL in config before go-live.
 }
 ```
 
-**KCB sandbox note:** The KCB Buni sandbox (`sandbox.buni.kcbgroup.com`) requires manual IPN URL registration by emailing the KCB Buni technical team. Provision `MPESA_KCB_CALLBACK_URL` as a config value from day one — never hardcode it.
 
 ---
 
@@ -646,30 +619,23 @@ func (c *Connector) ParseWebhook(ctx context.Context, headers map[string]string,
 }
 ```
 
-**No token refresh needed:** Paystack uses a static secret key (`sk_test_*` / `sk_live_*`). Unlike M-Pesa and KCB, there is no OAuth token to manage or refresh. The cron token-refresh job does NOT apply to this connector.
 
 ---
 
-### 5.6 Pesalink Connector
 
 **Role in V1:** Merchant settlement and cross-currency payouts. **Not a collection rail** — this connector is only invoked by the Settlement & Payout Service, never by the Orchestrator's `InitiateCollection` path.
 
-The Pesalink flow is a four-step chain: **Quote → Recipient → Transfer → Fund**. Each step is a separate API call; the transfer is asynchronous (confirmed via webhook or polling).
 
 ```go
-// internal/connector/pesalink/connector.go
 type Config struct {
     APIToken   string // JWT or personal/business API token
-    ProfileID  string // Pesalink profile/account ID
     BaseURL    string // "https://api.transferwise.com" in production
     Sandbox    bool
 }
 
-func (c *Connector) Name() string { return "pesalink" }
 
 func (c *Connector) Capabilities() connector.Capabilities {
     return connector.Capabilities{
-        SupportsCollection:  false, // Pesalink is payout-only
         SupportsPayout:      true,
         SupportsRefund:      false,
         SupportedCurrencies: []string{"KES", "USD", "GBP", "EUR", "NGN"},
@@ -678,9 +644,7 @@ func (c *Connector) Capabilities() connector.Capabilities {
 }
 
 // InitiateCollection is a no-op stub — the routing engine must never route
-// a collection request to Pesalink. Calling this is a programming error.
 func (c *Connector) InitiateCollection(_ context.Context, _ connector.CollectionRequest) (connector.CollectionResult, error) {
-    return connector.CollectionResult{}, fmt.Errorf("pesalink: collection not supported")
 }
 
 func (c *Connector) InitiatePayout(ctx context.Context, req connector.PayoutRequest) (connector.PayoutResult, error) {
@@ -710,9 +674,7 @@ func (c *Connector) InitiatePayout(ctx context.Context, req connector.PayoutRequ
 }
 
 func (c *Connector) ParseWebhook(ctx context.Context, headers map[string]string, body []byte) (connector.WebhookEvent, error) {
-    // 1. Verify webhook signature — Pesalink signs with RSA public key.
     //    Header: X-Signature-SHA256 (base64 RSA signature over payload)
-    //    Verify against Pesalink's published public key.
     // 2. Parse event_type:
     //    "transfers#state-change" with current_state:
     //       "outgoing_payment_sent" → payout succeeded
@@ -723,7 +685,6 @@ func (c *Connector) ParseWebhook(ctx context.Context, headers map[string]string,
 }
 ```
 
-**Recipient caching:** Pesalink charges a small fee per new recipient account. Cache recipient IDs in Redis keyed by `(merchantID, currency, accountDetails_hash)` to avoid re-creating recipients on every settlement run. Expire cache entries after 30 days to allow for account detail changes.
 
 ---
 
@@ -846,13 +807,11 @@ type Condition struct {
 | Priority | Condition | Primary | Fallback | Notes |
 |---|---|---|---|---|
 | 1 | Merchant has explicit PSP override | configured PSP | — | Per-merchant routing override |
-| 2 | `currency=KES` + `method=mpesa_stk` | `mpesa` | `kcb` | KCB as M-Pesa failover |
-| 3 | `currency=KES` + `method=kcb_stk` | `kcb` | `mpesa` | Explicit KCB request; M-Pesa as fallback |
+
+
 | 4 | `currency=KES` + `method=card` | `paystack` | — | Paystack is sole card rail in V1 |
-| 5 | Settlement/payout (internal) | `pesalink` | — | Never exposed to collection routing |
 | 6 | Default catch-all | highest-priority connector listing the currency in `Capabilities.SupportedCurrencies` | — | Safety net |
 
-**Important routing constraint:** The routing engine must explicitly exclude `pesalink` from any collection routing decision. Add an allowlist check: `if psp == "pesalink" { skip }` when iterating candidates for collection requests.
 
 ### 7.2 Circuit Breaker
 
@@ -918,9 +877,7 @@ func Handler(registry *connector.Registry, dedup *DedupStore, whRepo repository.
 | PSP | Verification method |
 |---|---|
 | **M-Pesa** | IP allowlist (Safaricom publishes egress IPs). No HMAC on STK callbacks. |
-| **KCB** | IP allowlist. Confirm with KCB Buni whether a shared secret header is added in production. |
 | **Paystack** | `x-paystack-signature` = HMAC-SHA512(raw body, secret key). Reject if mismatch. |
-| **Pesalink** | `X-Signature-SHA256` RSA signature (base64-encoded) over raw body. Verify against Pesalink's published public key. |
 
 ### 8.3 Consumer (worker process)
 
@@ -958,17 +915,13 @@ func (e *Engine) PostEntries(ctx context.Context, entries []domain.LedgerEntry) 
 | Account ID | Type | Description |
 |---|---|---|
 | `psp_clearing:mpesa` | Liability | Funds received from M-Pesa, awaiting settlement |
-| `psp_clearing:kcb` | Liability | Funds received from KCB, awaiting settlement |
 | `psp_clearing:paystack` | Liability | Paystack balance awaiting settlement |
 | `merchant:<id>:available` | Liability | Funds available for merchant payout |
-| `merchant:<id>:in_transit` | Liability | Funds being settled via Pesalink (awaiting transfer confirmation) |
-| `merchant:<id>:settled` | Liability | Funds confirmed settled by Pesalink |
 | `platform:fees` | Revenue | Platform fee income |
 | `platform:operating` | Asset | Operating account |
 
 ### 9.2 Double-Entry Patterns
 
-**Collection via M-Pesa or KCB (net of fee):**
 ```
 debit  psp_clearing:mpesa            100000   # KES 1,000 received
 credit merchant:<id>:available        95000   # net to merchant
@@ -990,19 +943,16 @@ debit  merchant:<id>:available       100000
 credit psp_clearing:mpesa            100000
 ```
 
-**Merchant payout via Pesalink (initiate):**
 ```
 debit  merchant:<id>:available       100000
 credit merchant:<id>:in_transit      100000
 ```
 
-**Pesalink transfer confirmed (`outgoing_payment_sent` webhook):**
 ```
 debit  merchant:<id>:in_transit      100000
 credit merchant:<id>:settled         100000
 ```
 
-**Pesalink transfer failed (`funds_refunded` webhook):**
 ```
 debit  merchant:<id>:in_transit      100000
 credit merchant:<id>:available       100000   # reverse the initiation
@@ -1124,15 +1074,12 @@ Separate consumers for:
 ```
 Every hour: Get batch of Attempts with status=processing older than 30 min.
   M-Pesa:   call connector.GetStatus(pspReference) via Daraja Query API.
-  KCB:      no poll endpoint — flag as "manual review" if older than threshold;
              rely on nightly statement reconciliation.
   Paystack: call GET /transaction/verify/:reference.
 
 Every night at 02:00: Full reconciliation per PSP.
   M-Pesa:   pull Daraja Transaction Status / C2B transaction report.
-  KCB:      pull KCB Buni settlement report.
   Paystack: call GET /transaction endpoint with date filter.
-  Pesalink: pull transfer statement.
   Match against Attempt/Payout records by psp_reference.
   Generate exception report for: amount mismatches, orphaned PSP transactions,
   orphaned local transactions.
@@ -1145,22 +1092,16 @@ Every hour: Query merchants with available balance > settlement threshold.
   For each:
     1. Compute settlement amount per currency.
     2. Create payout record.
-    3. Call pesalink.InitiatePayout (Quote → Recipient → Transfer → Fund).
     4. Post ledger entries: merchant:available → merchant:in_transit.
-    5. Terminal confirmation arrives via Pesalink transfer-state webhook.
 ```
 
 ### 12.3 Token Refresh Runner
 
-Only M-Pesa and KCB use OAuth2 tokens that expire and require proactive refresh.
 Paystack uses a static secret key — no refresh needed.
-Pesalink uses a long-lived API token — monitor expiry and alert if approaching.
 
 ```
 Every 50 min:
   Refresh M-Pesa OAuth token (expires in ~3600s; refresh at ~3540s).
-  Refresh KCB Buni OAuth token (same pattern).
-  Check Pesalink API token expiry — alert if within 7 days of expiry.
 ```
 
 ---
@@ -1306,7 +1247,6 @@ var (
     ReconciliationExceptions, _ = meter.Int64Counter("zia.reconciliation.exceptions")
     CircuitBreakerOpen, _       = meter.Int64ObservableGauge("zia.circuit_breaker.open")
     DLQDepth, _                 = meter.Int64ObservableGauge("zia.dlq.depth")
-    PesalinkRecipientCacheHits, _ = meter.Int64Counter("zia.pesalink.recipient_cache_hits")
 )
 ```
 
@@ -1396,9 +1336,7 @@ type Config struct {
 
     // V1 connectors
     MPesa    mpesa.Config
-    KCB      kcb.Config
     Paystack paystack.Config
-    Pesalink pesalink.Config
 
     // Deferred to P5+
     // Stripe stripe.Config
@@ -1450,21 +1388,11 @@ MPESA_ALLOWED_IPS=196.201.214.200,196.201.214.206,196.201.213.114,196.201.214.20
 MPESA_B2C_INITIATOR_NAME=
 MPESA_B2C_SECURITY_CREDENTIAL=
 
-# KCB (Buni)
-KCB_CONSUMER_KEY=
-KCB_CONSUMER_SECRET=
-KCB_ORG_SHORTCODE=
-KCB_CALLBACK_URL=     # registered manually with KCB Buni team
-KCB_ALLOWED_IPS=      # confirm KCB egress IPs with their technical team
 
 # Paystack
 PAYSTACK_SECRET_KEY=
 PAYSTACK_WEBHOOK_SECRET=
 
-# Pesalink
-PESALINK_API_TOKEN=
-PESALINK_PROFILE_ID=
-PESALINK_BASE_URL=https://api.transferwise.com
 ```
 
 ---
@@ -1577,9 +1505,7 @@ CREATE TABLE payouts (
     merchant_id  UUID NOT NULL REFERENCES merchants(id),
     amount_minor BIGINT NOT NULL,
     currency     TEXT NOT NULL,
-    rail         TEXT NOT NULL,  -- 'pesalink' in V1
     status       TEXT NOT NULL DEFAULT 'pending',
-    psp_reference TEXT,          -- Pesalink transferID
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -1605,13 +1531,10 @@ CREATE TABLE routing_rules (
 
 CREATE INDEX idx_routing_rules_priority ON routing_rules(priority) WHERE enabled = true;
 
--- Recipient cache for Pesalink — avoids re-creating recipients on every settlement
-CREATE TABLE pesalink_recipients (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     merchant_id      UUID NOT NULL REFERENCES merchants(id),
     currency         TEXT NOT NULL,
     account_hash     TEXT NOT NULL, -- hash of account details
-    pesalink_acct_id TEXT NOT NULL,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (merchant_id, currency, account_hash)
 );
@@ -1628,9 +1551,7 @@ CREATE TABLE pesalink_recipients (
 | **Orchestrator** | Routing + connector dispatch, failover, idempotency | Mock connector/router/repo interfaces |
 | **Ledger** | Double-entry invariants | Property-based: random event sequences, assert sum(debits)==sum(credits) per currency |
 | **Connector — M-Pesa** | STK Push, B2C, webhook parsing, error code mapping | Daraja sandbox + mock HTTP server for edge cases |
-| **Connector — KCB** | STK/IPN flow, IPN parsing | KCB Buni UAT sandbox |
 | **Connector — Paystack** | `/transaction/initialize`, webhook HMAC, `/transaction/verify` | Paystack test mode |
-| **Connector — Pesalink** | Quote→Recipient→Transfer→Fund chain, recipient caching, transfer webhook | Pesalink sandbox |
 | **E2E** | Full payment flow per method | Docker Compose with Postgres + Redis + NATS, mock PSP servers |
 | **Chaos** | Connector timeout → failover, duplicate webhooks, out-of-order callbacks | Test harness injecting failures at connector boundary |
 | **Idempotency** | Same request twice, same webhook twice | Fire duplicates, assert single side effect and no ledger duplication |
@@ -1641,7 +1562,6 @@ CREATE TABLE pesalink_recipients (
 - Duplicate webhooks with the same `dedup_key` are idempotent
 - Routing failover on connector timeout selects the next available PSP
 - Idempotency key replay returns the same result without side effects
-- Pesalink `InitiateCollection` always returns an error (never silently accepted)
 - `sum(debits) == sum(credits)` per currency across all ledger entries at any point in time
 
 ---
@@ -1655,9 +1575,7 @@ CREATE TABLE pesalink_recipients (
 | **P2 — Ledger** | `internal/ledger`, `internal/repository/ledger.go` | Ledger entries posted on terminal PI transitions; invariant tests pass; V1 account hierarchy seeded |
 | **P3 — Webhooks** | `internal/webhook`, `internal/repository/webhookevent.go`, `cmd/worker` | Webhook ingestion → dedup → persist → event bus consumer processes event; ack-fast-process-async confirmed |
 | **P4a — M-Pesa** | `internal/connector/mpesa` | STK Push contract test passing in Daraja sandbox; B2C payout stub (production B2C Go-Live separate) |
-| **P4b — KCB** | `internal/connector/kcb` | IPN flow working in Buni UAT; failover from M-Pesa to KCB exercised in E2E |
 | **P4c — Paystack** | `internal/connector/paystack` | `initialize` + `verify` + webhook HMAC all passing against Paystack test mode |
-| **P4d — Pesalink** | `internal/connector/pesalink`, `internal/settlement`, `pesalink_recipients` table | Quote→Recipient→Transfer→Fund chain working in sandbox; recipient caching tested; payout ledger entries correct |
 | **P5 — Reconciliation** | `internal/reconciliation`, `cmd/cron` | Nightly reconciliation job per PSP; exception queue populated for mismatches |
 | **P6 — Notification** | `internal/notification` | Outbound merchant webhooks with exponential-backoff retry |
 | **P7 — Merchant Portal** | `internal/merchant`, `internal/authn`, frontend | API key management, merchant CRUD, routing rule management, dashboard data endpoints |
@@ -1676,10 +1594,6 @@ CREATE TABLE pesalink_recipients (
 - [ ] Callback URL registered on Daraja production portal
 - [ ] Nightly reconciliation job scheduled and exception alerting wired up
 
-### KCB (Buni)
-- [ ] Production credentials obtained from KCB Buni team
-- [ ] Production IPN callback URL registered with KCB Buni team (email-based process)
-- [ ] KCB production egress IPs confirmed and loaded into `KCB_ALLOWED_IPS`
 - [ ] Multi-network test (Airtel Money, T-Kash) confirmed working end-to-end in UAT
 
 ### Paystack
@@ -1688,9 +1602,5 @@ CREATE TABLE pesalink_recipients (
 - [ ] Webhook signing secret loaded into `PAYSTACK_WEBHOOK_SECRET`
 - [ ] KYC/business verification completed on Paystack dashboard
 
-### Pesalink
 - [ ] Business account verified and production API token issued
-- [ ] Profile ID (`PESALINK_PROFILE_ID`) confirmed for production environment
-- [ ] Pesalink RSA public key loaded for webhook signature verification
 - [ ] Settlement currency pairs tested (KES→KES, KES→USD as applicable)
-- [ ] Recipient caching table (`pesalink_recipients`) populated via settlement dry-run

@@ -43,16 +43,21 @@ type RequestEnvelope struct {
 	AdditionalData  []KeyValuePair `json:"additionalData"`
 }
 
-func respond(w http.ResponseWriter, r *http.Request, status int, data any) {
-	msgID := GetReqID(r.Context())
-	resp := ResponseEnvelope{
-		StatusCode:         "0",
-		StatusDescription:  "Success",
-		MessageCode:        strconv.Itoa(status),
-		MessageDescription: http.StatusText(status),
-		MessageID:          msgID,
+func buildEnvelope(r *http.Request, statusCode, statusDesc, msgCode, msgDesc string, data any, errInfo *ErrorInfo) ResponseEnvelope {
+	return ResponseEnvelope{
+		StatusCode:         statusCode,
+		StatusDescription:  statusDesc,
+		MessageCode:        msgCode,
+		MessageDescription: msgDesc,
+		ErrorInfo:          errInfo,
+		MessageID:          GetReqID(r.Context()),
+		ConversationID:     GetConversationID(r.Context()),
 		PrimaryData:        data,
 	}
+}
+
+func respond(w http.ResponseWriter, r *http.Request, status int, data any) {
+	resp := buildEnvelope(r, "0", "Success", strconv.Itoa(status), http.StatusText(status), data, nil)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
@@ -61,19 +66,10 @@ func respond(w http.ResponseWriter, r *http.Request, status int, data any) {
 }
 
 func respondError(w http.ResponseWriter, r *http.Request, status int, code, msg string) {
-	msgID := GetReqID(r.Context())
-	resp := ResponseEnvelope{
-		StatusCode:         code,
-		StatusDescription:  "BusinessError",
-		MessageCode:        strconv.Itoa(status),
-		MessageDescription: msg,
-		MessageID:          msgID,
-		ErrorInfo: &ErrorInfo{
-			ErrorCode:    code,
-			ErrorMessage: msg,
-		},
-		PrimaryData: nil,
-	}
+	resp := buildEnvelope(r, code, "BusinessError", strconv.Itoa(status), msg, nil, &ErrorInfo{
+		ErrorCode:    code,
+		ErrorMessage: msg,
+	})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
@@ -82,20 +78,11 @@ func respondError(w http.ResponseWriter, r *http.Request, status int, code, msg 
 }
 
 func respondValidationError(w http.ResponseWriter, r *http.Request, fieldErrors []FieldError) {
-	msgID := GetReqID(r.Context())
-	resp := ResponseEnvelope{
-		StatusCode:         "1001",
-		StatusDescription:  "Validation error",
-		MessageCode:        "400",
-		MessageDescription: "One or more fields failed validation",
-		MessageID:          msgID,
-		ErrorInfo: &ErrorInfo{
-			ErrorCode:    "1001",
-			ErrorMessage: "One or more fields failed validation",
-			FieldErrors:  fieldErrors,
-		},
-		PrimaryData: nil,
-	}
+	resp := buildEnvelope(r, "1001", "Validation error", "400", "One or more fields failed validation", nil, &ErrorInfo{
+		ErrorCode:    "1001",
+		ErrorMessage: "One or more fields failed validation",
+		FieldErrors:  fieldErrors,
+	})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {

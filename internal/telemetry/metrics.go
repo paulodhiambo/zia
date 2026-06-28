@@ -18,5 +18,4 @@ var (
 	ReconciliationExceptions, _    = meter.Int64Counter("zia.reconciliation.exceptions")
 	CircuitBreakerOpen, _           = meter.Int64ObservableGauge("zia.circuit_breaker.open")
 	DLQDepth, _                     = meter.Int64ObservableGauge("zia.dlq.depth")
-	PesalinkRecipientCacheHits, _   = meter.Int64Counter("zia.pesalink.recipient_cache_hits")
 )

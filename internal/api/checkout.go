@@ -39,6 +39,7 @@ func NewCheckoutHandler(
 type createCheckoutRequest struct {
 	AmountMinor   int64  `json:"amountMinor"`
 	Currency      string `json:"currency"`
+	Method        string `json:"method"`
 	CustomerEmail string `json:"customerEmail"`
 	CustomerPhone string `json:"customerPhone"`
 	CallbackURL   string `json:"callbackUrl"`
@@ -80,6 +81,7 @@ func (h *CheckoutHandler) Create(w http.ResponseWriter, r *http.Request) {
 		zap.String("merchant_id", merchantID),
 		zap.Int64("amount_minor", req.AmountMinor),
 		zap.String("currency", req.Currency),
+		zap.String("method", req.Method),
 		zap.String("customer_phone", req.CustomerPhone),
 		zap.String("customer_email", req.CustomerEmail),
 		zap.String("callback_url", req.CallbackURL),
@@ -182,11 +184,15 @@ func (h *CheckoutHandler) Status(w http.ResponseWriter, r *http.Request) {
 }
 
 func buildPIRequest(merchantID string, req createCheckoutRequest) orchestrator.CreatePIRequest {
+	method := req.Method
+	if method == "" {
+		method = "mpesa_stk"
+	}
 	return orchestrator.CreatePIRequest{
 		MerchantID:    merchantID,
 		AmountMinor:   req.AmountMinor,
 		Currency:      req.Currency,
-		Method:        "mpesa_stk",
+		Method:        domain.PaymentMethod(method),
 		CustomerPhone: req.CustomerPhone,
 		CustomerEmail: req.CustomerEmail,
 	}

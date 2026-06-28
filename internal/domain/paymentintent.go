@@ -19,7 +19,6 @@ type PaymentMethod string
 
 const (
 	MethodMpesaSTK PaymentMethod = "mpesa_stk"
-	MethodKCBSTK   PaymentMethod = "kcb_stk"
 	MethodCard     PaymentMethod = "card"
 )
 

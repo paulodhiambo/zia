@@ -1,7 +1,6 @@
 # Zia
 
 **A unified payment aggregator/switch for Africa-first commerce.**
-One integration. Six payment rails. M-Pesa, KCB, PayPal, Paystack, Stripe, and Pesalink — orchestrated through a single, provider-agnostic API.
 
 > "Zia" — Swahili for "cross over." Zia is the bridge merchants use to move money across payment rails without building and maintaining six separate integrations.
 
@@ -38,7 +37,6 @@ One integration. Six payment rails. M-Pesa, KCB, PayPal, Paystack, Stripe, and P
 
 ## What is Zia?
 
-Zia is a **payment switch**, not a single payment gateway. Merchants integrate once against Zia's API and can collect payments via mobile money (M-Pesa, KCB) and cards/wallets (Stripe, PayPal, Paystack), while Zia handles cross-currency merchant settlement and payouts via Pesalink — all behind one canonical `PaymentIntent` model.
 
 Zia exists to solve three problems merchants in Kenya and across Africa hit immediately when accepting payments:
 
@@ -57,13 +55,10 @@ A **JavaScript embeddable checkout widget** is on the roadmap (see [Roadmap](#ro
 | Provider | Role | Region | Flow |
 |---|---|---|---|
 | **M-Pesa** (Daraja) | Collection (primary, KE) + B2C refunds/payouts | Kenya | STK Push, async via callback |
-| **KCB** (Buni) | Collection (failover for M-Pesa; bridges Airtel Money/T-Kash/bank rails) | Kenya | STK Push (M-Pesa Express via KCB), async via IPN |
 | **Stripe** | Collection (cards/wallets) | Global | PaymentIntents, client-side tokenization |
 | **Paystack** | Collection (cards + mobile money) | Africa-wide | Hosted/inline checkout, webhook-confirmed |
 | **PayPal** | Collection (cards/wallet) | Global | Orders API v2, redirect/approve/capture |
-| **Pesalink** | Settlement, merchant payouts, FX/treasury | Global | Quote → Recipient → Transfer → Fund |
 
-> **Note:** Pesalink is intentionally not a "collection" method in this system — it has no consumer-facing checkout. It is the engine behind merchant settlement and cross-currency payouts. See `architecture.md §5.1` for the rationale.
 
 ---
 
@@ -75,7 +70,6 @@ flowchart LR
     GW --> ORC[Orchestrator]
     ORC --> RTE[Routing Engine]
     ORC --> Conn[Connector Layer]
-    Conn --> PSP[(M-Pesa / KCB / PayPal / Paystack / Stripe / Pesalink)]
     PSP -->|webhooks| WH[Webhook Ingestion]
     WH --> ORC
     ORC --> LED[(Ledger - Postgres)]
@@ -127,11 +121,9 @@ Zia/
 │   └── connector/
 │       ├── connector.go         # shared Connector interface
 │       ├── mpesa/
-│       ├── kcb/
 │       ├── paypal/
 │       ├── paystack/
 │       ├── stripe/
-│       └── Pesalink/
 ├── pkg/
 │   ├── httpsign/
 │   └── moneyutil/
@@ -160,11 +152,9 @@ Zia/
 - `make`
 - Sandbox/developer accounts for the PSPs you intend to test:
     - [Safaricom Daraja](https://developer.safaricom.co.ke/) (M-Pesa)
-    - [KCB Buni](https://buni.kcbgroup.com/) (sandbox: `sandbox.buni.kcbgroup.com`)
     - [Stripe](https://dashboard.stripe.com/register) (test mode keys)
     - [Paystack](https://dashboard.paystack.com/#/signup) (test mode keys)
     - [PayPal Developer](https://developer.paypal.com/) (sandbox app)
-    - [Pesalink Sandbox](https://sandbox.transferPesalink.tech/) (business sandbox account)
 
 ---
 
@@ -215,11 +205,6 @@ MPESA_B2C_INITIATOR_NAME=
 MPESA_B2C_SECURITY_CREDENTIAL=
 MPESA_CALLBACK_BASE_URL=https://your-ngrok-or-domain.example.com
 
-# KCB (Buni)
-KCB_CONSUMER_KEY=
-KCB_CONSUMER_SECRET=
-KCB_ORG_SHORTCODE=
-KCB_IPN_CALLBACK_URL=
 
 # Stripe
 STRIPE_SECRET_KEY=
@@ -234,9 +219,6 @@ PAYPAL_CLIENT_ID=
 PAYPAL_CLIENT_SECRET=
 PAYPAL_WEBHOOK_ID=
 
-# Pesalink
-Pesalink_API_TOKEN=
-Pesalink_PROFILE_ID=
 
 # Security
 VAULT_ADDR=
@@ -246,7 +228,7 @@ HMAC_SIGNING_SECRET=
 
 > **Never commit `.env` or real credentials.** In staging/production, secrets are pulled from Vault/KMS at runtime — see `ARCHITECTURE.md §10`.
 
-For local webhook testing against M-Pesa/KCB/Stripe/PayPal/Paystack sandboxes, expose your local server with a tunnel (e.g. `ngrok http 8080`) and register that URL as your callback/webhook URL in each PSP's dashboard.
+For local webhook testing against M-Pesa/Stripe/PayPal/Paystack sandboxes, expose your local server with a tunnel (e.g. `ngrok http 8080`) and register that URL as your callback/webhook URL in each PSP's dashboard.
 
 ---
 

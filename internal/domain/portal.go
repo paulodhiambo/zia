@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type User struct {
 	ID           string    `db:"id" json:"id"`
@@ -68,6 +71,12 @@ type WebhookEndpoint struct {
 	Events     int       `db:"events" json:"events"`
 	Status     string    `db:"status" json:"status"`
 	CreatedAt  time.Time `db:"created_at" json:"-"`
+}
+
+type NotificationPreferences struct {
+	MerchantID  string          `db:"merchant_id" json:"-"`
+	Preferences json.RawMessage `db:"preferences" json:"preferences"`
+	UpdatedAt   time.Time       `db:"updated_at" json:"updatedAt"`
 }
 
 type Notification struct {

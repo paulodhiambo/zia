@@ -2,7 +2,6 @@ package ledger
 
 const (
 	AccountPSPClearingMpesa   = "psp_clearing:mpesa"
-	AccountPSPClearingKCB     = "psp_clearing:kcb"
 	AccountPSPClearingPaystack = "psp_clearing:paystack"
 
 	AccountMerchantAvailable = "merchant:%s:available"

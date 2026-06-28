@@ -7,10 +7,8 @@ import (
 	"time"
 
 	"zia/internal/connector"
-	"zia/internal/connector/kcb"
 	"zia/internal/connector/mpesa"
 	"zia/internal/connector/paystack"
-	"zia/internal/connector/pesalink"
 	"zia/internal/ledger"
 	"zia/internal/reconciliation"
 	"zia/internal/repository"
@@ -84,19 +82,10 @@ func main() {
 		registry.Register("mpesa", mpesa.New(cfg, logger))
 		logger.Info("registered mpesa connector")
 	}
-	if cfg := kcb.ConfigFromEnv(); cfg.ConsumerKey != "" {
-		registry.Register("kcb", kcb.New(cfg))
-		logger.Info("registered kcb connector")
-	}
 	if cfg := paystack.ConfigFromEnv(); cfg.SecretKey != "" {
 		registry.Register("paystack", paystack.New(cfg))
 		logger.Info("registered paystack connector")
 	}
-	if cfg := pesalink.ConfigFromEnv(); cfg.APIKey != "" {
-		registry.Register("pesalink", pesalink.New(cfg))
-		logger.Info("registered pesalink connector")
-	}
-
 	recon := reconciliation.NewRunner(registry, attRepo, logger)
 
 	yesterday := time.Now().UTC().Add(-24 * time.Hour)

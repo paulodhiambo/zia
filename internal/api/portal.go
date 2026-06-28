@@ -22,18 +22,19 @@ import (
 )
 
 type PortalHandler struct {
-	userRepo       repository.UserRepository
-	sessionRepo    repository.SessionRepository
-	merchantRepo   repository.MerchantRepository
-	piRepo         repository.PaymentIntentRepository
-	payoutRepo     repository.PayoutRepository
-	ledgerRepo     repository.LedgerRepository
-	customerRepo   repository.CustomerRepository
-	teamMemberRepo repository.TeamMemberRepository
-	teamInviteRepo repository.TeamInvitationRepository
-	webhookEPRepo  repository.WebhookEndpointRepository
-	notifRepo      repository.NotificationRepository
-	logger         *zap.Logger
+	userRepo        repository.UserRepository
+	sessionRepo     repository.SessionRepository
+	merchantRepo    repository.MerchantRepository
+	piRepo          repository.PaymentIntentRepository
+	payoutRepo      repository.PayoutRepository
+	ledgerRepo      repository.LedgerRepository
+	customerRepo    repository.CustomerRepository
+	teamMemberRepo  repository.TeamMemberRepository
+	teamInviteRepo  repository.TeamInvitationRepository
+	webhookEPRepo   repository.WebhookEndpointRepository
+	webhookEventRepo repository.WebhookEventRepository
+	notifRepo       repository.NotificationRepository
+	logger          *zap.Logger
 }
 
 type portalCtxKey string
@@ -51,13 +52,13 @@ func PortalAuth(repo repository.SessionRepository) func(http.Handler) http.Handl
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			auth := r.Header.Get("Authorization")
 			if auth == "" || !strings.HasPrefix(auth, "Bearer ") {
-				writePortalUnauthorized(w)
+				respondError(w, r, http.StatusUnauthorized, "1002", "Authentication failed")
 				return
 			}
 			token := strings.TrimPrefix(auth, "Bearer ")
 			session, err := repo.GetByToken(r.Context(), token)
 			if err != nil {
-				writePortalUnauthorized(w)
+				respondError(w, r, http.StatusUnauthorized, "1002", "Invalid email or password")
 				return
 			}
 			ctx := context.WithValue(r.Context(), portalUserID, session.UserID)
@@ -65,12 +66,6 @@ func PortalAuth(repo repository.SessionRepository) func(http.Handler) http.Handl
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
-}
-
-func writePortalUnauthorized(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
-	_ = json.NewEncoder(w).Encode(portalError("1002", "Authentication failed"))
 }
 
 func NewPortalHandler(
@@ -84,22 +79,24 @@ func NewPortalHandler(
 	teamMemberRepo repository.TeamMemberRepository,
 	teamInviteRepo repository.TeamInvitationRepository,
 	webhookEPRepo repository.WebhookEndpointRepository,
+	webhookEventRepo repository.WebhookEventRepository,
 	notifRepo repository.NotificationRepository,
 	logger *zap.Logger,
 ) *PortalHandler {
 	return &PortalHandler{
-		userRepo:       userRepo,
-		sessionRepo:    sessionRepo,
-		merchantRepo:   merchantRepo,
-		piRepo:         piRepo,
-		payoutRepo:     payoutRepo,
-		ledgerRepo:     ledgerRepo,
-		customerRepo:   customerRepo,
-		teamMemberRepo: teamMemberRepo,
-		teamInviteRepo: teamInviteRepo,
-		webhookEPRepo:  webhookEPRepo,
-		notifRepo:      notifRepo,
-		logger:         logger,
+		userRepo:         userRepo,
+		sessionRepo:      sessionRepo,
+		merchantRepo:     merchantRepo,
+		piRepo:           piRepo,
+		payoutRepo:       payoutRepo,
+		ledgerRepo:       ledgerRepo,
+		customerRepo:     customerRepo,
+		teamMemberRepo:   teamMemberRepo,
+		teamInviteRepo:   teamInviteRepo,
+		webhookEPRepo:    webhookEPRepo,
+		webhookEventRepo: webhookEventRepo,
+		notifRepo:        notifRepo,
+		logger:           logger,
 	}
 }
 
@@ -160,6 +157,7 @@ func (h *PortalHandler) Login(w http.ResponseWriter, r *http.Request) {
 			"name":  user.Name,
 			"email": user.Email,
 			"role":  user.Role,
+			"title": user.Title,
 		},
 	})
 }
@@ -818,6 +816,30 @@ func (h *PortalHandler) CreateWebhookEndpoint(w http.ResponseWriter, r *http.Req
 	})
 }
 
+// --- webhook events ---
+
+func (h *PortalHandler) ListWebhookEvents(w http.ResponseWriter, r *http.Request) {
+	merchantID := h.getMerchantID(r)
+	evts, err := h.webhookEventRepo.ListByMerchant(r.Context(), merchantID, 50)
+	if err != nil {
+		h.logger.Error("list webhook events", zap.Error(err))
+		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
+		return
+	}
+	resp := make([]map[string]any, 0, len(evts))
+	for _, e := range evts {
+		resp = append(resp, map[string]any{
+			"id":                e.ID,
+			"psp":               e.PSP,
+			"eventType":         e.EventType,
+			"pspReference":      e.PSPReference,
+			"processingStatus":  e.ProcessingStatus,
+			"receivedAt":        e.ReceivedAt,
+		})
+	}
+	respond(w, r, http.StatusOK, map[string]any{"events": resp})
+}
+
 // --- notifications ---
 
 func (h *PortalHandler) ListNotifications(w http.ResponseWriter, r *http.Request) {
@@ -853,8 +875,54 @@ func (h *PortalHandler) MarkAllNotificationsRead(w http.ResponseWriter, r *http.
 	respond(w, r, http.StatusOK, map[string]bool{"success": true})
 }
 
+func (h *PortalHandler) GetNotificationPreferences(w http.ResponseWriter, r *http.Request) {
+	merchantID := h.getMerchantID(r)
+	prefs, err := h.notifRepo.GetPreferences(r.Context(), merchantID)
+	if err != nil {
+		h.logger.Error("get notification preferences", zap.Error(err))
+		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
+		return
+	}
+	var data map[string]any
+	json.Unmarshal(prefs.Preferences, &data)
+	respond(w, r, http.StatusOK, map[string]any{"preferences": data})
+}
+
 func (h *PortalHandler) UpdateNotificationPreferences(w http.ResponseWriter, r *http.Request) {
-	respond(w, r, http.StatusOK, map[string]bool{"success": true})
+	merchantID := h.getMerchantID(r)
+
+	var env RequestEnvelope
+	if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
+		respondPortalError(w, r, http.StatusBadRequest, "1001", "Invalid request")
+		return
+	}
+
+	var incoming map[string]any
+	if err := json.Unmarshal(env.PrimaryData, &incoming); err != nil {
+		respondPortalError(w, r, http.StatusBadRequest, "1001", "Invalid primaryData")
+		return
+	}
+
+	existingPrefs, err := h.notifRepo.GetPreferences(r.Context(), merchantID)
+	var merged map[string]any
+	if err == nil {
+		json.Unmarshal(existingPrefs.Preferences, &merged)
+	} else {
+		merged = make(map[string]any)
+	}
+	deepMerge(merged, incoming)
+
+	mergedJSON, _ := json.Marshal(merged)
+	if err := h.notifRepo.UpsertPreferences(r.Context(), merchantID, mergedJSON); err != nil {
+		h.logger.Error("upsert notification preferences", zap.Error(err))
+		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Failed to save preferences")
+		return
+	}
+
+	respond(w, r, http.StatusOK, map[string]any{
+		"success":     true,
+		"preferences": merged,
+	})
 }
 
 // --- profile ---
@@ -978,17 +1046,20 @@ func durationAgo(t time.Time) string {
 	}
 }
 
+func deepMerge(dst, src map[string]any) {
+	for k, v := range src {
+		srcMap, srcOk := v.(map[string]any)
+		dstMap, dstOk := dst[k].(map[string]any)
+		if srcOk && dstOk {
+			deepMerge(dstMap, srcMap)
+		} else {
+			dst[k] = v
+		}
+	}
+}
+
 func respondPortalError(w http.ResponseWriter, r *http.Request, httpStatus int, code, msg string) {
 	respondError(w, r, httpStatus, code, msg)
 }
 
-func portalError(code, msg string) any {
-	return map[string]any{
-		"statusCode":         code,
-		"statusDescription":  "BusinessError",
-		"messageCode":        code,
-		"messageDescription": msg,
-		"errorInfo":          map[string]string{"errorCode": code, "errorMessage": msg},
-		"primaryData":        nil,
-	}
-}
+

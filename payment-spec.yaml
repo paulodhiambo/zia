@@ -5,8 +5,8 @@ info:
   version: "1.0.0"
   description: |
     The Zia Payment API lets merchants create, confirm, and refund payments across
-    M-Pesa, KCB, PayPal, Paystack, and Stripe, and create checkout sessions for the
-    upcoming embeddable widget. Pesalink is used internally for settlement/payout and is
+    M-Pesa, Google Pay, PayPal, Paystack, and Stripe, and create checkout sessions for the
+    upcoming embeddable widget.
     not exposed as a customer-facing collection method (see ARCHITECTURE.md).
 
     ## Envelope convention
@@ -91,7 +91,6 @@ paths:
       tags: [Payment Intents]
       summary: Create a payment intent
       description: |
-        Starts a collection. For async methods (`mpesa_stk`, `kcb_stk`) this triggers
         the customer-facing prompt and returns `requires_action` immediately; the
         terminal outcome arrives via your configured outbound webhook or by polling
         `GET /v1/payment_intents/{id}`. For `paypal_redirect`, `nextAction` in the
@@ -239,7 +238,7 @@ paths:
       description: |
         Issues a full or partial refund. Omit `amountMinor` in `primaryData` for a
         full refund of the remaining refundable balance. Routed to the connector
-        appropriate for how the original payment was collected (M-Pesa/KCB B2C for
+        appropriate for how the original payment was collected (M-Pesa B2C for
         mobile-money originated payments, the originating card/wallet PSP for
         card/PayPal payments) — see ARCHITECTURE.md §9.2.
       operationId: refundPaymentIntent
@@ -368,12 +367,12 @@ paths:
       summary: Inbound PSP webhook (NOT enveloped)
       description: |
         Receives asynchronous callbacks directly from each PSP in that PSP's own
-        native payload shape (Daraja callback JSON, KCB IPN, Stripe event object,
+        native payload shape (Daraja callback JSON, Stripe event object,
         Paystack event, PayPal webhook event). **This endpoint intentionally does
         not use the Zia request/response envelope**, since the payload format is
         owned by the PSP, not by Zia. Authenticity is verified per-PSP via
         signature header (`Stripe-Signature`, `x-paystack-signature`, PayPal's
-        transmission-signature API) or shared-secret/IP-allowlist for M-Pesa/KCB —
+        transmission-signature API) or shared-secret/IP-allowlist for M-Pesa —
         see ARCHITECTURE.md §8. Always acknowledge with `200 OK` quickly; processing
         happens asynchronously off the event bus.
       operationId: receivePspWebhook
@@ -384,7 +383,6 @@ paths:
           required: true
           schema:
             type: string
-            enum: [mpesa, kcb, paypal, paystack, stripe]
           example: mpesa
       requestBody:
         required: true
@@ -632,7 +630,6 @@ components:
 
     PaymentMethod:
       type: string
-      enum: [mpesa_stk, kcb_stk, card, paypal_redirect]
 
     PaymentIntentStatus:
       type: string
@@ -781,7 +778,6 @@ components:
           $ref: '#/components/schemas/PaymentMethod'
         customerPhone:
           type: string
-          description: Required for `mpesa_stk` and `kcb_stk`. E.164-style, e.g. 254712345678.
         customerEmail:
           type: string
           description: Required for `card` and `paypal_redirect`.

@@ -9,10 +9,8 @@ import (
 	"syscall"
 
 	"zia/internal/connector"
-	"zia/internal/connector/kcb"
 	"zia/internal/connector/mpesa"
 	"zia/internal/connector/paystack"
-	"zia/internal/connector/pesalink"
 	"zia/internal/idempotency"
 	"zia/internal/ledger"
 	"zia/internal/notification"
@@ -23,6 +21,7 @@ import (
 	"zia/internal/telemetry"
 	"zia/internal/webhook"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
@@ -100,16 +99,27 @@ func main() {
 		logger.Warn("stream may already exist", zap.Error(err))
 	}
 
-	piRepo := repository.NewPaymentIntent(nil)
-	attRepo := repository.NewAttempt(nil)
-	ledRepo := repository.NewLedger(nil)
+	poolCfg, err := pgxpool.ParseConfig(cfg.databaseURL)
+	if err != nil {
+		logger.Fatal("failed to parse database config", zap.Error(err))
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	if err != nil {
+		logger.Fatal("failed to connect to database", zap.Error(err))
+	}
+	defer pool.Close()
+
+	piRepo := repository.NewPaymentIntent(pool)
+	attRepo := repository.NewAttempt(pool)
+	ledRepo := repository.NewLedger(pool)
+	notifRepo := repository.NewNotificationRepo(pool)
 	idempotencyStore := idempotency.NewStore(rdb)
 	riskEng := risk.NewEngine()
 	cb := routing.NewCircuitBreaker()
 	routingEng := routing.NewEngine(cb, logger)
 	ledgerEng := ledger.NewEngine(ledRepo)
-	merchantRepo := repository.NewMerchant(nil)
-	notifDispatcher := notification.NewDispatcher(merchantRepo, js, logger)
+	merchantRepo := repository.NewMerchant(pool)
+	notifDispatcher := notification.NewDispatcher(merchantRepo, notifRepo, js, logger)
 
 	registry := connector.NewRegistry()
 
@@ -117,19 +127,10 @@ func main() {
 		registry.Register("mpesa", mpesa.New(cfg, logger))
 		logger.Info("registered mpesa connector")
 	}
-	if cfg := kcb.ConfigFromEnv(); cfg.ConsumerKey != "" {
-		registry.Register("kcb", kcb.New(cfg))
-		logger.Info("registered kcb connector")
-	}
 	if cfg := paystack.ConfigFromEnv(); cfg.SecretKey != "" {
 		registry.Register("paystack", paystack.New(cfg))
 		logger.Info("registered paystack connector")
 	}
-	if cfg := pesalink.ConfigFromEnv(); cfg.APIKey != "" {
-		registry.Register("pesalink", pesalink.New(cfg))
-		logger.Info("registered pesalink connector")
-	}
-
 	feePercent, _ := strconv.Atoi(os.Getenv("PLATFORM_FEE_PERCENT"))
 	if feePercent <= 0 {
 		feePercent = 5

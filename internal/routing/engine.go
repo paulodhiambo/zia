@@ -53,7 +53,7 @@ func NewEngine(cb *CircuitBreaker, logger *zap.Logger) *Engine {
 	e := &Engine{
 		cb:       cb,
 		logger:   logger,
-		excluded: map[string]bool{"pesalink": true},
+		excluded: map[string]bool{},
 	}
 	e.setDefaultRules()
 	return e
@@ -65,25 +65,18 @@ func (e *Engine) setDefaultRules() {
 			Priority:   1,
 			Conditions: Condition{Method: "mpesa_stk", Currency: "KES"},
 			PrimaryPSP: "mpesa",
-			Fallbacks:  []string{"kcb"},
+			Fallbacks:  []string{},
 			Enabled:    true,
 		},
 		{
 			Priority:   2,
-			Conditions: Condition{Method: "kcb_stk", Currency: "KES"},
-			PrimaryPSP: "kcb",
-			Fallbacks:  []string{"mpesa"},
-			Enabled:    true,
-		},
-		{
-			Priority:   3,
 			Conditions: Condition{Method: "card", Currency: "KES"},
 			PrimaryPSP: "paystack",
 			Fallbacks:  []string{},
 			Enabled:    true,
 		},
 		{
-			Priority:   4,
+			Priority:   3,
 			Conditions: Condition{Method: "card"},
 			PrimaryPSP: "paystack",
 			Fallbacks:  []string{},

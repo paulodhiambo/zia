@@ -1,7 +1,6 @@
 # Payment Aggregator / Switch — Technical Architecture (V1)
 
 **Stack:** Go (Golang)
-**V1 Rails:** M-Pesa (Daraja), KCB (Buni), PayPal, Paystack, Stripe, Pesalink
 **Forward-looking requirement:** the core must expose a session/token-based API that a future embeddable JS widget can drive without redesign.
 
 ---
@@ -9,7 +8,6 @@
 ## 1. Goals & Non-Goals
 
 ### 1.1 Goals
-- A single integration point (REST API + webhooks) for merchants to accept payments across mobile money (M-Pesa, KCB-routed mobile money/bank rails), cards/wallets (Stripe, PayPal, Paystack), and to **settle/payout** merchants and disburse refunds across currencies via Pesalink.
 - One canonical **Payment Intent** model that abstracts away provider-specific quirks (STK push vs. redirect vs. hosted fields vs. webhook-only confirmation).
 - Pluggable **connector** architecture — adding PSP #7 should never touch core orchestration code.
 - Built for **idempotency, auditability, and reconciliation** from day one — this is money, not a CRUD app.
@@ -31,7 +29,6 @@
 | **Payment Intent** | Our canonical, provider-agnostic record of "merchant wants to collect X amount from a customer" |
 | **Charge / Attempt** | One concrete try against one PSP for one Payment Intent (a Payment Intent can have multiple Attempts on retry/failover) |
 | **Checkout Session** | A short-lived, pre-configured object the future widget will reference by a public token to render a checkout UI |
-| **PSP** | Payment Service Provider (M-Pesa, KCB, PayPal, Paystack, Stripe, Pesalink) |
 | **IPN/Callback/Webhook** | Asynchronous, server-to-server notification of a payment event from a PSP |
 
 ---
@@ -65,11 +62,9 @@ flowchart TB
 
     subgraph Conn["Connector Layer"]
         CMP[M-Pesa Connector]
-        CKCB[KCB Connector]
         CPP[PayPal Connector]
         CPS[Paystack Connector]
         CST[Stripe Connector]
-        CWS[Pesalink Connector]
     end
 
     subgraph Infra["Infrastructure"]
@@ -88,7 +83,6 @@ flowchart TB
     ORC --> IDP
     ORC --> FRD
     ORC --> Conn
-    Conn -->|outbound API calls| EXT[(M-Pesa / KCB / PayPal / Paystack / Stripe / Pesalink)]
     EXT -->|webhooks/callbacks| WH
     WH --> MQ
     MQ --> ORC
@@ -260,7 +254,7 @@ type PaymentIntent struct {
     Currency        Currency
     Status          PaymentIntentStatus
     CustomerRef     string
-    CustomerPhone   string // for M-Pesa/KCB STK
+    CustomerPhone   string // for M-Pesa STK
     CustomerEmail   string // for Stripe/PayPal/Paystack
     AllowedMethods  []PaymentMethod
     IdempotencyKey  string
@@ -274,7 +268,6 @@ type PaymentMethod string
 
 const (
     MethodMpesaSTK   PaymentMethod = "mpesa_stk"
-    MethodKCBSTK     PaymentMethod = "kcb_stk"
     MethodCard       PaymentMethod = "card"           // routed to Stripe/Paystack/PayPal
     MethodPaypal     PaymentMethod = "paypal_redirect"
 )
@@ -283,7 +276,6 @@ const (
 type Attempt struct {
     ID              string
     PaymentIntentID string
-    PSP             string // "mpesa", "kcb", "paypal", "paystack", "stripe", "Pesalink"
     PSPReference    string // CheckoutRequestID, PaymentIntent ID, OrderID, etc.
     Status          string
     SequenceNo      int    // for ordering failover attempts
@@ -311,7 +303,6 @@ type LedgerEntry struct {
 
 ## 5. PSP Connector Layer — the Adapter Pattern
 
-This is the architectural linchpin. Every PSP, no matter how different its API shape, is forced through **one Go interface**. The Orchestration Engine only ever talks to this interface — it has zero knowledge of Daraja OAuth tokens, Stripe's PaymentIntents, or Pesalink's quote→recipient→transfer→fund chain.
 
 ```go
 package connector
@@ -336,14 +327,13 @@ type Connector interface {
     InitiateCollection(ctx context.Context, req CollectionRequest) (CollectionResult, error)
 
     // GetStatus actively polls the PSP — used as a reconciliation
-    // fallback when webhooks are missed (critical for M-Pesa/KCB).
+    // fallback when webhooks are missed (critical for M-Pesa).
     GetStatus(ctx context.Context, pspReference string) (StatusResult, error)
 
     // Refund issues money back to the customer.
     Refund(ctx context.Context, req RefundRequest) (RefundResult, error)
 
     // InitiatePayout moves money OUT to a merchant or customer
-    // (B2C for M-Pesa/KCB, Payouts API for Pesalink/PayPal/Stripe Connect).
     InitiatePayout(ctx context.Context, req PayoutRequest) (PayoutResult, error)
 
     // ParseWebhook verifies signature/authenticity and normalizes the
@@ -399,11 +389,9 @@ type WebhookEvent struct {
 | PSP | Primary use in V1 | Auth model | Confirmation style | Key implementation notes |
 |---|---|---|---|---|
 | **M-Pesa (Daraja 3.0)** | Customer collection (KE) | OAuth2 client-credentials, token cached ~55 min | STK Push is async: initiate → customer enters PIN on-device → Safaricom POSTs callback. No customer-visible redirect. | Use **C2B STK Push (Lipa Na M-Pesa Online)** for collection; **B2C** for refunds/payouts (separate Go-Live approval & `SecurityCredential`). Always run a **nightly Transaction Status reconciliation job** — callbacks are not 100% guaranteed delivery. Phone numbers normalized to `2547XXXXXXXX`. Respond `HTTP 200` to every callback within 30s, even on internal processing errors, to avoid Safaricom's aggressive retry storm; ack-then-process-async via the event bus. |
-| **KCB (Buni)** | Customer collection (KE) — alternate/failover rail; also reaches Airtel Money, T-Kash, Vooma, and bank rails Daraja can't | OAuth2 client-credentials (`/token?grant_type=client_credentials`) | M-Pesa Express (STK) via Buni is async like Daraja, confirmed via **IPN callback** (push-only, no pull/poll endpoint for IPN — KCB calls you) | Treat as a **second mobile-money rail** for redundancy/least-cost routing, and as the multi-network bridge (Airtel Money/T-Kash) Safaricom doesn't expose. Sandbox IPN registration is manual (email-based) — provision callback URLs as configuration, not hardcoded. |
 | **PayPal** | Customer collection (intl) | OAuth2 client-credentials | Orders API v2: create order → customer approves (redirect or PayPal JS SDK button) → capture server-side. Webhooks confirm `CHECKOUT.ORDER.APPROVED` / `PAYMENT.CAPTURE.COMPLETED` | `NextAction.Type = "redirect"` (or embed via SDK once widget exists). Verify webhook signature via PayPal's transmission-signature verification API, not just shared secret. |
 | **Paystack** | Customer collection (cards + mobile money, pan-African) | Secret key, Bearer auth | `POST /transaction/initialize` → redirect to Paystack-hosted page or inline popup → `charge.success` webhook is source of truth (poll `/transaction/verify/:reference` as fallback) | Verify webhook via `x-paystack-signature` HMAC-SHA512. Good fallback/expansion rail for African card traffic alongside Stripe. |
 | **Stripe** | Customer collection (cards/wallets, global) | Secret key, Bearer auth | `PaymentIntents` API; client uses Stripe.js/Elements (tokenizes card client-side — **no PAN touches our servers**); `payment_intent.succeeded` webhook | Verify webhook via `Stripe-Signature` header + signing secret, with timestamp tolerance to prevent replay. This is the reference implementation for "PCI scope stays with the PSP." |
-| **Pesalink (Platform API)** | **Settlement/payout & treasury — not customer collection.** Used to pay merchants in their preferred currency, cross-border refunds, FX treasury | Personal/Business API token or OAuth (enterprise integration model), JWT-signed requests | Quote → Recipient (`/v1/accounts`) → Transfer (`/v1/transfers`) → Fund (`/v3/profiles/{id}/transfers/{id}/payments`); async transfer-state webhooks | **Architectural note:** Pesalink has no consumer checkout widget — it's the right tool for the *payout leg*, not the *collection leg*. It plugs into the **Settlement & Payout Service** (§9), letting a Kenyan merchant get settled in KES while a Nigerian or UK merchant gets settled in NGN/GBP without us holding multi-currency banking relationships ourselves. |
 
 ---
 
@@ -428,7 +416,6 @@ sequenceDiagram
     ORC->>IDP: Check idempotency key
     IDP-->>ORC: Not seen before -> proceed
     ORC->>RTE: SelectConnector(currency, country, method, merchant prefs)
-    RTE-->>ORC: connector = "mpesa" (primary), fallback=["kcb"]
     ORC->>CON: InitiateCollection(req)
     CON->>PSP: STK Push request (signed/OAuth)
     PSP-->>CON: CheckoutRequestID
@@ -486,14 +473,11 @@ type Router interface {
 | Priority | Rule |
 |---|---|
 | 1 | Merchant has an explicit PSP override for this currency/method → use it |
-| 2 | `currency=KES` + `method=mobile_money` → primary `mpesa`, fallback `kcb` (and vice-versa if M-Pesa float/credentials are degraded) |
 | 3 | `currency=KES` + `method=card` → primary `paystack`, fallback `stripe` |
 | 4 | International card traffic → primary `stripe`, fallback `paystack` (where supported) or `paypal` |
 | 5 | Customer explicitly chose PayPal at checkout → `paypal`, no fallback (PayPal customers expect PayPal) |
-| 6 | Merchant payout/settlement in non-KES currency → `Pesalink` |
 | 7 | Default catch-all → highest-priority connector that lists the currency in `Capabilities.SupportedCurrencies` |
 
-A **circuit breaker** per connector (open after N consecutive failures or P99 latency breach) automatically removes a degraded PSP from routing candidates for a cool-down window, emitting a metric/alert — this is what makes "KCB as M-Pesa's failover" actually valuable in production, not just on paper.
 
 ---
 
@@ -521,11 +505,11 @@ flowchart LR
 ```
 
 **Non-negotiable rules:**
-1. **Verify signature before doing anything else** — HMAC (Paystack), `Stripe-Signature` (Stripe), transmission-signature API (PayPal), and IP-allowlist + shared-secret/IPN-token checks for M-Pesa/KCB which don't sign payloads as strongly.
+1. **Verify signature before doing anything else** — HMAC (Paystack), `Stripe-Signature` (Stripe), transmission-signature API (PayPal), and IP-allowlist + shared-secret/IPN-token checks for M-Pesa which don't sign payloads as strongly.
 2. **Always ACK fast, process async.** Safaricom in particular retries aggressively on non-200 or slow responses — the edge handler's only job is verify → dedupe → persist → 200. Business logic happens in a consumer off the event bus.
 3. **Dedup key** = PSP's own event/transaction ID when available, else a stable hash of `(psp, pspReference, eventType, amount)`.
 4. **State machine guards every transition** — a duplicate or late "succeeded" webhook arriving after a Refund has already been processed is a no-op, never a regression.
-5. **Reconciliation job** (cron, hourly + full nightly run) calls `Connector.GetStatus` for every `Attempt` still `processing` past a threshold — this is what protects against missed webhooks entirely, which *will* happen with M-Pesa/KCB at some point.
+5. **Reconciliation job** (cron, hourly + full nightly run) calls `Connector.GetStatus` for every `Attempt` still `processing` past a threshold — this is what protects against missed webhooks entirely, which *will* happen with M-Pesa at some point.
 
 ---
 
@@ -540,13 +524,9 @@ Every money movement posts **at least two balanced LedgerEntry rows** (sum of de
 ### 9.2 Settlement & Payout Service
 Decoupled from the collection path entirely. Runs on a schedule (e.g. T+1, configurable per merchant) or on-demand:
 1. Sum each merchant's `available` ledger balance per currency.
-2. If merchant's settlement currency ≠ ledger currency (e.g. merchant wants USD payouts but most volume is KES), call the **Pesalink connector**: create quote → recipient (cached after first use) → transfer → fund.
-3. Post `PAYOUT` ledger entries and move the merchant's balance from `available` to `in_transit` until Pesalink confirms, then `settled`.
-4. For payouts that are simple **refunds to a Kenyan customer's M-Pesa number**, this goes through the M-Pesa/KCB connector's `InitiatePayout` (B2C) instead — Pesalink is for merchant-level, often cross-currency, settlement; M-Pesa/KCB B2C is for customer-level KES refunds. Keep this distinction explicit in code (`RefundRequest.Rail` is resolved by the router, not assumed).
 
 ### 9.3 Reconciliation Service
 Nightly job per PSP:
-- Pull PSP settlement/statement report (Daraja Transaction Status / B2C result query, Stripe Balance Transactions, Paystack settlements, PayPal Transaction Search, Pesalink statements).
 - Match against our `Attempt`/`Payout` records by `psp_reference`.
 - Flag: amount mismatches, orphaned PSP transactions (PSP has it, we don't — usually a missed webhook), orphaned local transactions (we have it, PSP doesn't — usually a failed-but-recorded-as-success bug) into an **exceptions queue** a human reviews. This single job is what catches the bugs that "passed all tests."
 
@@ -560,11 +540,10 @@ Nightly job per PSP:
 | **Secrets** | All PSP API keys/credentials/`SecurityCredential` (M-Pesa B2C cert) stored in **Vault/KMS**, never in env vars in plaintext in production, fetched at runtime with short-lived leases, rotated on a schedule and immediately on suspected compromise. |
 | **Transport** | TLS 1.2+ everywhere; mTLS between internal services once split beyond the monolith. |
 | **Merchant API auth** | API key (public/secret pair) + **HMAC request signing** (timestamp + nonce + body hash) to prevent replay, mirroring how the future widget's public tokens will work. |
-| **Webhook auth** | Per-PSP signature verification (§8) + IP allowlisting where the PSP publishes static egress IPs (M-Pesa/KCB). |
+| **Webhook auth** | Per-PSP signature verification (§8) + IP allowlisting where the PSP publishes static egress IPs (M-Pesa). |
 | **Data at rest** | Column-level encryption for PII (phone numbers, emails) using envelope encryption via KMS; full-disk encryption on all volumes. |
 | **AuthZ** | RBAC for internal dashboard/ops users; merchants are tenant-isolated at the query layer (every query scoped by `merchant_id`, enforced via Postgres Row-Level Security as a second line of defense). |
 | **Audit trail** | Every state transition, every webhook received, every manual ops action is append-only logged with actor + reason — required for dispute handling and regulator requests. |
-| **Idempotency** | Mandatory `Idempotency-Key` header on all mutating merchant API calls; service-level idempotency keys on every connector call (Pesalink's `originalTransferId`, our own keys passed where the PSP supports it) to make safe retries possible everywhere. |
 
 ---
 
@@ -609,11 +588,9 @@ payswitch/
 │   └── connector/
 │       ├── connector.go              # the Connector interface (§5)
 │       ├── mpesa/
-│       ├── kcb/
 │       ├── paypal/
 │       ├── paystack/
 │       ├── stripe/
-│       └── Pesalink/
 ├── pkg/
 │   ├── httpsign/                       # HMAC request signing helpers (shared client+server)
 │   └── moneyutil/                       # minor-unit arithmetic helpers, no floats anywhere
@@ -676,7 +653,7 @@ This is intentionally simple for V1; the `risk.Engine` interface should be desig
 
 > This is **not legal advice** — confirm specifics with Kenyan counsel and each PSP's partnership team before going live. The points below are architectural implications of real, well-known regulatory facts.
 
-- **CBK / National Payment System Act:** Operating a switch that touches M-Pesa and KCB rails for *other merchants* (i.e., as a payment service provider/aggregator, not your own e-commerce checkout) typically requires registration/authorization with the **Central Bank of Kenya** under the National Payment System Act/Regulations once you go beyond a single-merchant integration. Architect merchant onboarding/KYC (§ below) and segregated client-fund ledgering now so you're not retrofitting compliance later.
+- **CBK / National Payment System Act:** Operating a switch that touches M-Pesa rails for *other merchants* (i.e., as a payment service provider/aggregator, not your own e-commerce checkout) typically requires registration/authorization with the **Central Bank of Kenya** under the National Payment System Act/Regulations once you go beyond a single-merchant integration. Architect merchant onboarding/KYC (§ below) and segregated client-fund ledgering now so you're not retrofitting compliance later.
 - **Segregated/Pass-through funds:** Treat all merchant collections as **client funds, not platform revenue**, on the ledger (separate top-level account hierarchy: `platform:*` vs `merchant:*:available`). This is both good architecture and typically a regulatory expectation for aggregators.
 - **PCI DSS:** SAQ A scope as long as no raw card data is ever transmitted/stored/processed on our infra (enforced by always using PSP-hosted tokenization — §10).
 - **KYC/AML on merchant onboarding:** A `merchant.onboarding` module (out of core scope for this document, but a hard dependency before go-live) collecting business registration, beneficial ownership, and screening against sanctions lists before a `PSP_ACCOUNT` is activated.
@@ -696,7 +673,6 @@ This is intentionally simple for V1; the `risk.Engine` interface should be desig
 
 ## 17. Testing Strategy
 
-- **Per-connector contract tests** against each PSP's sandbox (Daraja sandbox + community "Pesa Playground" as a fallback given documented Daraja sandbox instability; KCB Buni UAT; Stripe/PayPal/Paystack/Pesalink sandboxes) — run in CI, not just manually before launch.
 - **Ledger invariant tests:** property-based tests asserting sum(debits) == sum(credits) after every simulated event sequence, including out-of-order and duplicate webhook delivery.
 - **Chaos/failover tests:** simulate a PSP timing out or returning 5xx mid-flow and assert the Routing Engine correctly fails over and the customer is never double-charged.
 - **Idempotency tests:** fire the same merchant request / same webhook twice (and out of order) and assert single ledger effect.
@@ -720,5 +696,5 @@ This is intentionally simple for V1; the `risk.Engine` interface should be desig
 1. **Provider-agnostic core, provider-specific edges** — the `Connector` interface is the seam that keeps the system extensible.
 2. **Three-tier state model** (PaymentIntent → Attempt → LedgerEntry) so retries/failover never corrupt financial truth.
 3. **Modular monolith now, microservices-ready later** — boundaries are real (separate packages/schemas), deployment is simple.
-4. **Webhooks are untrusted input** — verify, dedupe, ack-fast-process-async, and never trust them as the *only* source of truth (reconciliation jobs are mandatory, not optional, especially for M-Pesa/KCB).
+4. **Webhooks are untrusted input** — verify, dedupe, ack-fast-process-async, and never trust them as the *only* source of truth (reconciliation jobs are mandatory, not optional, especially for M-Pesa).
 6. **Checkout Sessions exist from V1** specifically so the embeddable widget is a frontend project next, not a backend redesign.

@@ -1,7 +1,6 @@
 {
 	"info": {
 		"name": "Zia Payment API",
-		"description": "Complete collection for the Zia payment aggregator API — merchant endpoints, portal (frontend) endpoints, and PSP webhook ingestion.\n\n## Authentication\n\n- **Merchant API**: `Authorization: Bearer {{api_key}}` — API key created via the portal (Create API Key).\n- **Portal API**: `Authorization: Bearer {{portal_token}}` — session token returned by `POST /api/v1/auth/login`.\n\n## Execution Order\n\n1. **Signup** → creates a merchant workspace and user account. Run once.\n2. **Login** → saves `portal_token` for all subsequent portal requests.\n3. **Portal Auth required** → dashboard, transactions, payouts, customers, team, developer, notifications, profile.\n4. **Create API Key** → saves the raw key (shown only once; copy it).\n5. **Merchant API** → payment intents, checkout, merchant dashboard — use `{{api_key}}`.\n\n## Webhook Caveats\n\nWebhook endpoints return **200** for registered PSP connectors (mpesa, paystack) and **404** for unregistered ones (kcb, pesalink). Connectors register at startup only when their env vars (`KCB_CONSUMER_KEY`, `PESALINK_API_TOKEN`, etc.) are non-empty.\n\n## Base URL\n\nSet `base_url` to the running API instance (default `http://localhost:8080`).",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
@@ -837,7 +836,7 @@
 					}
 				},
 				{
-					"name": "KCB Webhook",
+					"name": "Google Pay Webhook",
 					"request": {
 						"method": "POST",
 						"header": [
@@ -845,9 +844,8 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"status\": \"completed\",\n  \"reference\": \"KCB-REF-001\",\n  \"amount\": 15000,\n  \"currency\": \"KES\",\n  \"phone\": \"254712345678\",\n  \"transactionId\": \"TXN001\"\n}"
+							"raw": "{\n  \"status\": \"completed\",\n  \"reference\": \"GP-REF-001\",\n  \"amount\": 15000,\n  \"currency\": \"KES\",\n  \"phone\": \"254712345678\",\n  \"transactionId\": \"TXN001\"\n}"
 						},
-						"url": "{{base_url}}/v1/webhooks/kcb"
 					}
 				},
 				{
@@ -875,7 +873,6 @@
 							"mode": "raw",
 							"raw": "{\n  \"event\": \"transfer.completed\",\n  \"data\": {\n    \"id\": \"psl_txn_001\",\n    \"status\": \"completed\",\n    \"amount\": 500000,\n    \"currency\": \"KES\",\n    \"reference\": \"PSL-REF-001\"\n  }\n}"
 						},
-						"url": "{{base_url}}/v1/webhooks/pesalink"
 					}
 				}
 			]

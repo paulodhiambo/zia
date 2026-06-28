@@ -49,6 +49,8 @@ type NotificationRepository interface {
 	Create(ctx context.Context, n *domain.Notification) error
 	ListByMerchant(ctx context.Context, merchantID string) ([]domain.Notification, error)
 	MarkAllRead(ctx context.Context, merchantID string) error
+	GetPreferences(ctx context.Context, merchantID string) (*domain.NotificationPreferences, error)
+	UpsertPreferences(ctx context.Context, merchantID string, preferences []byte) error
 }
 
 type userRepo struct{ db DBTX }
@@ -282,6 +284,18 @@ func (r *notificationRepo) ListByMerchant(ctx context.Context, merchantID string
 }
 func (r *notificationRepo) MarkAllRead(ctx context.Context, merchantID string) error {
 	_, err := r.db.Exec(ctx, `UPDATE notifications SET unread=false WHERE merchant_id=$1`, merchantID)
+	return err
+}
+func (r *notificationRepo) GetPreferences(ctx context.Context, merchantID string) (*domain.NotificationPreferences, error) {
+	p := &domain.NotificationPreferences{}
+	err := r.db.QueryRow(ctx, `SELECT merchant_id, preferences, updated_at FROM notification_preferences WHERE merchant_id=$1`, merchantID).Scan(&p.MerchantID, &p.Preferences, &p.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+func (r *notificationRepo) UpsertPreferences(ctx context.Context, merchantID string, preferences []byte) error {
+	_, err := r.db.Exec(ctx, `INSERT INTO notification_preferences (merchant_id, preferences, updated_at) VALUES ($1,$2,now()) ON CONFLICT (merchant_id) DO UPDATE SET preferences=$2, updated_at=now()`, merchantID, preferences)
 	return err
 }
 
