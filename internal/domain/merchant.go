@@ -11,6 +11,7 @@ const (
 
 type Merchant struct {
 	ID               string         `db:"id" json:"id"`
+	Code             string         `db:"code" json:"code"`
 	LegalName        string         `db:"legal_name" json:"legalName"`
 	Country          string         `db:"country" json:"country"`
 	DefaultCurrency  string         `db:"default_currency" json:"defaultCurrency"`

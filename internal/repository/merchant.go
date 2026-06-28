@@ -28,10 +28,10 @@ func NewMerchant(db DBTX) MerchantRepository {
 
 func (r *merchantRepo) Create(ctx context.Context, m *domain.Merchant) error {
 	_, err := r.db.Exec(ctx, `
-		INSERT INTO merchants (id, legal_name, country, default_currency, status,
+		INSERT INTO merchants (id, code, legal_name, country, default_currency, status,
 			settlement_config, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		m.ID, m.LegalName, m.Country, m.DefaultCurrency, m.Status,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		m.ID, m.Code, m.LegalName, m.Country, m.DefaultCurrency, m.Status,
 		m.SettlementConfig, m.CreatedAt)
 	return err
 }
@@ -39,9 +39,9 @@ func (r *merchantRepo) Create(ctx context.Context, m *domain.Merchant) error {
 func (r *merchantRepo) GetByID(ctx context.Context, id string) (*domain.Merchant, error) {
 	m := &domain.Merchant{}
 	err := r.db.QueryRow(ctx, `
-		SELECT id, legal_name, country, default_currency, status, settlement_config, created_at
+		SELECT id, code, legal_name, country, default_currency, status, settlement_config, created_at
 		FROM merchants WHERE id = $1`, id).Scan(
-		&m.ID, &m.LegalName, &m.Country, &m.DefaultCurrency, &m.Status,
+		&m.ID, &m.Code, &m.LegalName, &m.Country, &m.DefaultCurrency, &m.Status,
 		&m.SettlementConfig, &m.CreatedAt)
 	if err != nil {
 		return nil, err
@@ -58,7 +58,7 @@ func (r *merchantRepo) UpdateSettlementConfig(ctx context.Context, id string, co
 
 func (r *merchantRepo) ListAll(ctx context.Context) ([]domain.Merchant, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT id, legal_name, country, default_currency, status, settlement_config, created_at
+		SELECT id, code, legal_name, country, default_currency, status, settlement_config, created_at
 		FROM merchants ORDER BY legal_name ASC`)
 	if err != nil {
 		return nil, err
@@ -68,7 +68,7 @@ func (r *merchantRepo) ListAll(ctx context.Context) ([]domain.Merchant, error) {
 	var merchants []domain.Merchant
 	for rows.Next() {
 		var m domain.Merchant
-		if err := rows.Scan(&m.ID, &m.LegalName, &m.Country, &m.DefaultCurrency,
+		if err := rows.Scan(&m.ID, &m.Code, &m.LegalName, &m.Country, &m.DefaultCurrency,
 			&m.Status, &m.SettlementConfig, &m.CreatedAt); err != nil {
 			return nil, err
 		}

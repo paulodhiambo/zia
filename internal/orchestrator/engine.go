@@ -19,6 +19,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const queryDelay = 40 * time.Second
+
 type FeeConfig struct {
 	Percent       int   // percentage (e.g. 5 = 5%)
 	MinAmount     int64 // minimum fee in minor units (e.g. 100 = 1.00)
@@ -308,6 +310,10 @@ func (e *Engine) CreatePaymentIntent(ctx context.Context, req CreatePIRequest) (
 		zap.String("to", string(newStatus)),
 	)
 
+	if route.Primary == "mpesa" && newStatus == domain.PIRequiresAction {
+		e.scheduleDelayedQuery(pi.ID, attempt.ID, route.Primary)
+	}
+
 	return &CreatePIResult{
 		PaymentIntent: pi,
 		NextAction:    colResult.NextAction,
@@ -463,4 +469,118 @@ func (e *Engine) computeFee(amountMinor int64) int64 {
 		return e.feeCfg.MinAmount
 	}
 	return fee
+}
+
+func (e *Engine) scheduleDelayedQuery(piID, attemptID, psp string) {
+	time.AfterFunc(queryDelay, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		pi, err := e.piRepo.GetByID(ctx, piID)
+		if err != nil {
+			e.logger.Error("delayed query: get pi", zap.String("pi_id", piID), zap.Error(err))
+			return
+		}
+		if pi.Status != domain.PIRequiresAction && pi.Status != domain.PIProcessing {
+			return
+		}
+
+		attempt, err := e.attRepo.GetByID(ctx, attemptID)
+		if err != nil {
+			e.logger.Error("delayed query: get attempt", zap.String("attempt_id", attemptID), zap.Error(err))
+			return
+		}
+
+		conn, ok := e.registry.Get(psp)
+		if !ok {
+			e.logger.Error("delayed query: connector not found", zap.String("psp", psp))
+			return
+		}
+
+		e.logger.Info("delayed query: calling GetStatus",
+			zap.String("pi_id", piID),
+			zap.String("psp_reference", attempt.PSPReference),
+		)
+
+		result, err := conn.GetStatus(ctx, attempt.PSPReference)
+		if err != nil {
+			e.logger.Error("delayed query: GetStatus failed", zap.String("pi_id", piID), zap.Error(err))
+			return
+		}
+
+		e.logger.Info("delayed query: GetStatus result",
+			zap.String("pi_id", piID),
+			zap.String("status", result.Status),
+		)
+
+		e.applyQueryResult(ctx, pi, attempt, result)
+	})
+}
+
+func (e *Engine) applyQueryResult(ctx context.Context, pi *domain.PaymentIntent, attempt *domain.Attempt, result connector.StatusResult) {
+	var newPIStatus domain.PaymentIntentStatus
+	var newAttemptStatus domain.AttemptStatus
+
+	switch result.Status {
+	case "succeeded":
+		newPIStatus = domain.PISucceeded
+		newAttemptStatus = domain.AttemptSucceeded
+	case "failed":
+		newPIStatus = domain.PIFailed
+		newAttemptStatus = domain.AttemptFailed
+	case "pending":
+		return
+	default:
+		return
+	}
+
+	if !IsValidTransition(pi.Status, newPIStatus) {
+		e.logger.Warn("delayed query: invalid transition",
+			zap.String("from", string(pi.Status)),
+			zap.String("to", string(newPIStatus)),
+			zap.String("pi_id", pi.ID),
+		)
+		return
+	}
+
+	if err := e.attRepo.UpdateStatus(ctx, attempt.ID, newAttemptStatus); err != nil {
+		e.logger.Error("delayed query: update attempt status", zap.String("attempt_id", attempt.ID), zap.Error(err))
+		return
+	}
+
+	if err := e.piRepo.UpdateStatus(ctx, pi.ID, newPIStatus); err != nil {
+		e.logger.Error("delayed query: update pi status", zap.String("pi_id", pi.ID), zap.Error(err))
+		return
+	}
+
+	e.logger.Info("delayed query: status updated",
+		zap.String("pi_id", pi.ID),
+		zap.String("pi_status", string(newPIStatus)),
+		zap.String("attempt_status", string(newAttemptStatus)),
+	)
+
+	if newPIStatus == domain.PISucceeded {
+		fee := e.computeFee(pi.AmountMinor)
+		if err := e.ledger.PostCollection(ctx, pi.MerchantID, pi.ID, attempt.PSP, pi.AmountMinor, pi.Currency, fee); err != nil {
+			e.logger.Error("delayed query: ledger post failed", zap.String("pi_id", pi.ID), zap.Error(err))
+			return
+		}
+	}
+
+	if e.notif != nil {
+		evt := notification.NotificationEvent{
+			EventType:    fmt.Sprintf("payment.%s", newPIStatus),
+			PIID:         pi.ID,
+			MerchantID:   pi.MerchantID,
+			AmountMinor:  pi.AmountMinor,
+			Currency:     pi.Currency,
+			PSP:          attempt.PSP,
+			PSPReference: attempt.PSPReference,
+			Status:       string(newPIStatus),
+			Timestamp:    time.Now().UTC().Format(time.RFC3339),
+		}
+		if err := e.notif.Publish(ctx, evt); err != nil {
+			e.logger.Error("delayed query: notification publish failed", zap.String("pi_id", pi.ID), zap.Error(err))
+		}
+	}
 }

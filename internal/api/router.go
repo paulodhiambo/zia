@@ -57,6 +57,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		r.Route("/api/v1", func(api chi.Router) {
 			api.Post("/auth/login", deps.PortalHandler.Login)
 			api.Post("/auth/signup", deps.PortalHandler.Signup)
+			api.Post("/auth/send-otp", deps.PortalHandler.SendOTP)
 			api.Post("/auth/forgot-password", deps.PortalHandler.ForgotPassword)
 
 			api.Group(func(auth chi.Router) {
