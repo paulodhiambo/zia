@@ -22,6 +22,7 @@ import (
 	"zia/internal/telemetry"
 	"zia/internal/webhook"
 
+	"github.com/joho/godotenv"
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -51,6 +52,9 @@ func loadConfig() config {
 }
 
 func main() {
+	if err := godotenv.Load(); err != nil {
+		log.Printf("warning: no .env file found: %v", err)
+	}
 	cfg := loadConfig()
 
 	ctx, cancel := context.WithCancel(context.Background())

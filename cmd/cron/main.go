@@ -17,6 +17,7 @@ import (
 	"zia/internal/settlement"
 	"zia/internal/telemetry"
 
+	"github.com/joho/godotenv"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
@@ -41,6 +42,9 @@ func loadConfig() config {
 }
 
 func main() {
+	if err := godotenv.Load(); err != nil {
+		log.Printf("warning: no .env file found: %v", err)
+	}
 	cfg := loadConfig()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
