@@ -114,7 +114,7 @@ func (e *Engine) CreatePaymentIntent(ctx context.Context, req CreatePIRequest) (
 
 	now := time.Now().UTC()
 	pi := &domain.PaymentIntent{
-		ID:            "pi_" + uuid.New().String(),
+		ID:            uuid.New().String(),
 		MerchantID:    req.MerchantID,
 		AmountMinor:   req.AmountMinor,
 		Currency:      req.Currency,

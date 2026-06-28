@@ -27,6 +27,7 @@ import (
 	"zia/internal/telemetry"
 	"zia/internal/webhook"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -65,13 +66,21 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	shutdown, err := telemetry.Setup(ctx, cfg.telemetry)
-	if err != nil {
-		log.Fatalf("failed to setup telemetry: %v", err)
+	var telemetryShutdown func(context.Context) error
+	var setupErr error
+	if cfg.telemetry.Endpoint != "" {
+		telemetryShutdown, setupErr = telemetry.Setup(ctx, cfg.telemetry)
+		if setupErr != nil {
+			log.Fatalf("failed to setup telemetry: %v", setupErr)
+		}
+	} else {
+		log.Println("telemetry disabled (no endpoint configured)")
 	}
 	defer func() {
-		if err := shutdown(context.Background()); err != nil {
-			log.Printf("telemetry shutdown: %v", err)
+		if telemetryShutdown != nil {
+			if err := telemetryShutdown(context.Background()); err != nil {
+				log.Printf("telemetry shutdown: %v", err)
+			}
 		}
 	}()
 
@@ -92,20 +101,37 @@ func main() {
 		logger.Warn("redis not available, continuing without cache", zap.Error(err))
 	}
 
-	piRepo := repository.NewPaymentIntent(nil)
-	attRepo := repository.NewAttempt(nil)
-	whRepo := repository.NewWebhookEvent(nil)
-	merchantRepo := repository.NewMerchant(nil)
-	payoutRepo := repository.NewPayout(nil)
-	checkoutRepo := repository.NewCheckout(nil)
-	ledRepo := repository.NewLedger(nil)
-	userRepo := repository.NewUserRepo(nil)
-	sessionRepo := repository.NewSessionRepo(nil)
-	customerRepo := repository.NewCustomerRepo(nil)
-	teamMemberRepo := repository.NewTeamMemberRepo(nil)
-	teamInviteRepo := repository.NewTeamInvitationRepo(nil)
-	webhookEPRepo := repository.NewWebhookEndpointRepo(nil)
-	notifRepo := repository.NewNotificationRepo(nil)
+	poolCfg, err := pgxpool.ParseConfig(cfg.databaseURL)
+	if err != nil {
+		logger.Fatal("failed to parse database URL", zap.Error(err))
+	}
+	poolCfg.MaxConns = 10
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	if err != nil {
+		logger.Fatal("failed to create pool", zap.Error(err))
+	}
+	defer pool.Close()
+	// verify connectivity eagerly so the first request doesn't pay for a
+	// cold-start connection handshake (which can exceed the HTTP write timeout).
+	if err := pool.Ping(ctx); err != nil {
+		logger.Fatal("database unreachable", zap.Error(err))
+	}
+	logger.Info("database connected")
+
+	piRepo := repository.NewPaymentIntent(pool)
+	attRepo := repository.NewAttempt(pool)
+	whRepo := repository.NewWebhookEvent(pool)
+	merchantRepo := repository.NewMerchant(pool)
+	payoutRepo := repository.NewPayout(pool)
+	checkoutRepo := repository.NewCheckout(pool)
+	ledRepo := repository.NewLedger(pool)
+	userRepo := repository.NewUserRepo(pool)
+	sessionRepo := repository.NewSessionRepo(pool)
+	customerRepo := repository.NewCustomerRepo(pool)
+	teamMemberRepo := repository.NewTeamMemberRepo(pool)
+	teamInviteRepo := repository.NewTeamInvitationRepo(pool)
+	webhookEPRepo := repository.NewWebhookEndpointRepo(pool)
+	notifRepo := repository.NewNotificationRepo(pool)
 	idempotencyStore := idempotency.NewStore(rdb)
 	riskEng := risk.NewEngine()
 	cb := routing.NewCircuitBreaker()
@@ -145,7 +171,7 @@ func main() {
 
 	var notifDispatcher *notification.Dispatcher
 	if js != nil {
-		notifDispatcher = notification.NewDispatcher(nil, js, logger)
+		notifDispatcher = notification.NewDispatcher(merchantRepo, js, logger)
 	}
 
 	orc := orchestrator.New(

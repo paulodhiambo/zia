@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"zia/internal/authn"
 	"zia/internal/domain"
 	"zia/internal/orchestrator"
 	"zia/internal/repository"
@@ -44,7 +45,7 @@ type createCheckoutRequest struct {
 }
 
 func (h *CheckoutHandler) Create(w http.ResponseWriter, r *http.Request) {
-	merchantID := r.Context().Value("merchant_id").(string)
+	merchantID := r.Context().Value(authn.MerchantIDKey).(string)
 
 	var req createCheckoutRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

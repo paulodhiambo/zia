@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"zia/internal/authn"
 	"zia/internal/ledger"
 	"zia/internal/repository"
 
@@ -36,7 +37,7 @@ func NewMerchantHandler(
 }
 
 func (h *MerchantHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
-	merchantID := r.Context().Value("merchant_id").(string)
+	merchantID := r.Context().Value(authn.MerchantIDKey).(string)
 
 	merchant, err := h.merchantRepo.GetByID(r.Context(), merchantID)
 	if err != nil {
@@ -71,7 +72,7 @@ func (h *MerchantHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *MerchantHandler) ListTransactions(w http.ResponseWriter, r *http.Request) {
-	merchantID := r.Context().Value("merchant_id").(string)
+	merchantID := r.Context().Value(authn.MerchantIDKey).(string)
 
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 100 {
@@ -97,7 +98,7 @@ func (h *MerchantHandler) ListTransactions(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *MerchantHandler) GetBalance(w http.ResponseWriter, r *http.Request) {
-	merchantID := r.Context().Value("merchant_id").(string)
+	merchantID := r.Context().Value(authn.MerchantIDKey).(string)
 
 	available, _ := h.ledgerRepo.Balance(r.Context(), ledger.MerchantAvailable(merchantID))
 	inTransit, _ := h.ledgerRepo.Balance(r.Context(), ledger.MerchantInTransit(merchantID))
@@ -109,7 +110,7 @@ func (h *MerchantHandler) GetBalance(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *MerchantHandler) ListPayouts(w http.ResponseWriter, r *http.Request) {
-	merchantID := r.Context().Value("merchant_id").(string)
+	merchantID := r.Context().Value(authn.MerchantIDKey).(string)
 
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 100 {
@@ -139,7 +140,7 @@ type updateSettingsRequest struct {
 }
 
 func (h *MerchantHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
-	merchantID := r.Context().Value("merchant_id").(string)
+	merchantID := r.Context().Value(authn.MerchantIDKey).(string)
 
 	var req updateSettingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -170,7 +171,7 @@ func (h *MerchantHandler) UpdateSettings(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *MerchantHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
-	merchantID := r.Context().Value("merchant_id").(string)
+	merchantID := r.Context().Value(authn.MerchantIDKey).(string)
 
 	merchant, err := h.merchantRepo.GetByID(r.Context(), merchantID)
 	if err != nil {
