@@ -113,6 +113,15 @@ func (e *Engine) CreatePaymentIntent(ctx context.Context, req CreatePIRequest) (
 	}
 
 	now := time.Now().UTC()
+
+	// Generate a unique idempotency key when the caller doesn't provide one
+	// so the partial unique index idx_pi_idempotency (merchant_id, idempotency_key
+	// WHERE idempotency_key IS NOT NULL) doesn't reject duplicate empty strings.
+	ik := req.IdempotencyKey
+	if ik == "" {
+		ik = uuid.New().String()
+	}
+
 	pi := &domain.PaymentIntent{
 		ID:            uuid.New().String(),
 		MerchantID:    req.MerchantID,
@@ -123,7 +132,7 @@ func (e *Engine) CreatePaymentIntent(ctx context.Context, req CreatePIRequest) (
 		CustomerRef:   req.CustomerRef,
 		CustomerPhone: req.CustomerPhone,
 		CustomerEmail: req.CustomerEmail,
-		IdempotencyKey: req.IdempotencyKey,
+		IdempotencyKey: ik,
 		Metadata:      req.Metadata,
 		CreatedAt:     now,
 		UpdatedAt:     now,
