@@ -42,7 +42,7 @@ replicaCount: 2
 image:
   repository: ghcr.io/paulodhiambo/zia
   pullPolicy: IfNotPresent
-  tag: 258f4ba
+  tag: 6f8f3d8
 
 service:
   type: ClusterIP
