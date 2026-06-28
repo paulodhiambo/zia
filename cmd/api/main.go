@@ -99,6 +99,13 @@ func main() {
 	payoutRepo := repository.NewPayout(nil)
 	checkoutRepo := repository.NewCheckout(nil)
 	ledRepo := repository.NewLedger(nil)
+	userRepo := repository.NewUserRepo(nil)
+	sessionRepo := repository.NewSessionRepo(nil)
+	customerRepo := repository.NewCustomerRepo(nil)
+	teamMemberRepo := repository.NewTeamMemberRepo(nil)
+	teamInviteRepo := repository.NewTeamInvitationRepo(nil)
+	webhookEPRepo := repository.NewWebhookEndpointRepo(nil)
+	notifRepo := repository.NewNotificationRepo(nil)
 	idempotencyStore := idempotency.NewStore(rdb)
 	riskEng := risk.NewEngine()
 	cb := routing.NewCircuitBreaker()
@@ -161,15 +168,22 @@ func main() {
 	whHandler := api.NewWebhookHandler(registry, whRepo, dedupStore, webhookProc, logger)
 	merchantHandler := api.NewMerchantHandler(merchantRepo, piRepo, payoutRepo, ledRepo, logger)
 	checkoutHandler := api.NewCheckoutHandler(piSvc, checkoutRepo, piRepo, logger)
+	portalHandler := api.NewPortalHandler(
+		userRepo, sessionRepo, merchantRepo, piRepo, payoutRepo, ledRepo,
+		customerRepo, teamMemberRepo, teamInviteRepo, webhookEPRepo, notifRepo, logger,
+	)
 	authMiddleware := authn.Middleware(merchantRepo)
+	sessionMiddleware := api.PortalAuth(sessionRepo)
 
 	router := api.NewRouter(api.Dependencies{
-		Logger:          logger,
-		PIHandler:       piHandler,
-		WebhookHandler:  whHandler,
-		MerchantHandler: merchantHandler,
-		CheckoutHandler: checkoutHandler,
-		AuthMiddleware:  authMiddleware,
+		Logger:            logger,
+		PIHandler:         piHandler,
+		WebhookHandler:    whHandler,
+		MerchantHandler:   merchantHandler,
+		CheckoutHandler:   checkoutHandler,
+		PortalHandler:     portalHandler,
+		AuthMiddleware:    authMiddleware,
+		SessionMiddleware: sessionMiddleware,
 	})
 
 	srv := &http.Server{

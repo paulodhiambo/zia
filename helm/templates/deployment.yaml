@@ -37,6 +37,11 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
+          envFrom:
+            - configMapRef:
+                name: {{ include "app.fullname" . }}
+            - secretRef:
+                name: {{ .Values.secret.existingSecret | default (include "app.fullname" .) }}
           ports:
             - name: http
               containerPort: 8080

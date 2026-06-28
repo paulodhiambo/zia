@@ -17,7 +17,9 @@ type Dependencies struct {
 	WebhookHandler   *WebhookHandler
 	MerchantHandler  *MerchantHandler
 	CheckoutHandler  *CheckoutHandler
+	PortalHandler    *PortalHandler
 	AuthMiddleware   func(http.Handler) http.Handler
+	SessionMiddleware func(http.Handler) http.Handler
 }
 
 func NewRouter(deps Dependencies) http.Handler {
@@ -47,6 +49,40 @@ func NewRouter(deps Dependencies) http.Handler {
 			r.Get("/payouts", deps.MerchantHandler.ListPayouts)
 			r.Get("/settings", deps.MerchantHandler.GetSettings)
 			r.Put("/settings", deps.MerchantHandler.UpdateSettings)
+		})
+	}
+
+	if deps.PortalHandler != nil && deps.SessionMiddleware != nil {
+		r.Route("/api/v1", func(api chi.Router) {
+			api.Post("/auth/login", deps.PortalHandler.Login)
+			api.Post("/auth/signup", deps.PortalHandler.Signup)
+			api.Post("/auth/forgot-password", deps.PortalHandler.ForgotPassword)
+
+			api.Group(func(auth chi.Router) {
+				auth.Use(deps.SessionMiddleware)
+				auth.Get("/dashboard/overview", deps.PortalHandler.DashboardOverview)
+				auth.Get("/transactions", deps.PortalHandler.ListTransactions)
+				auth.Get("/payouts", deps.PortalHandler.ListPayouts)
+				auth.Post("/payouts/create", deps.PortalHandler.CreatePayout)
+				auth.Get("/customers", deps.PortalHandler.ListCustomers)
+				auth.Post("/customers/create", deps.PortalHandler.CreateCustomer)
+				auth.Get("/customers/{id}", deps.PortalHandler.GetCustomer)
+				auth.Get("/customers/{id}/charges", deps.PortalHandler.GetCustomerCharges)
+				auth.Get("/team/members", deps.PortalHandler.ListTeamMembers)
+				auth.Get("/team/invitations", deps.PortalHandler.ListInvitations)
+				auth.Post("/team/invite", deps.PortalHandler.InviteMember)
+				auth.Post("/team/invitations/{email}/resend", deps.PortalHandler.ResendInvitation)
+				auth.Delete("/team/invitations/{email}/revoke", deps.PortalHandler.RevokeInvitation)
+				auth.Get("/developer/keys", deps.PortalHandler.ListAPIKeys)
+				auth.Post("/developer/keys/create", deps.PortalHandler.CreateAPIKey)
+				auth.Get("/developer/webhooks", deps.PortalHandler.ListWebhookEndpoints)
+				auth.Post("/developer/webhooks/create", deps.PortalHandler.CreateWebhookEndpoint)
+				auth.Get("/notifications", deps.PortalHandler.ListNotifications)
+				auth.Post("/notifications/mark-all-read", deps.PortalHandler.MarkAllNotificationsRead)
+				auth.Post("/notifications/preferences", deps.PortalHandler.UpdateNotificationPreferences)
+				auth.Get("/profile", deps.PortalHandler.GetProfile)
+				auth.Post("/profile/update", deps.PortalHandler.UpdateProfile)
+			})
 		})
 	}
 

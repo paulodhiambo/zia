@@ -1,3 +1,42 @@
+# Non-sensitive configuration — rendered into a ConfigMap
+config:
+  port: "8080"
+  appEnv: "production"
+  natsURL: "nats://nats:4222"
+  ooEndpoint: "http://openobserve:5080"
+  ooServiceName: "zia-api"
+  ooEnvironment: "production"
+  ooSampleRate: "1.0"
+  mpesaShortCode: ""
+  mpesaCallbackBaseURL: ""
+  kcbOrgShortCode: ""
+  kcbCallbackURL: ""
+  pesalinkCallbackURL: ""
+  pesalinkPartnerID: ""
+
+# Sensitive credentials — rendered into a Secret.
+# Set secret.existingSecret to the name of a pre-existing Secret (e.g. managed by
+# Sealed Secrets or External Secrets Operator) to skip rendering a Secret from here.
+secret:
+  existingSecret: ""
+  databaseURL: ""
+  redisURL: ""
+  hmacSigningSecret: ""
+  ooEmail: ""
+  ooPassword: ""
+  mpesaConsumerKey: ""
+  mpesaConsumerSecret: ""
+  mpesaPassKey: ""
+  mpesaB2cInitiatorName: ""
+  mpesaB2cSecurityCredential: ""
+  kcbConsumerKey: ""
+  kcbConsumerSecret: ""
+  paystackSecretKey: ""
+  paystackPublicKey: ""
+  paystackWebhookKey: ""
+  pesalinkApiKey: ""
+  pesalinkApiSecret: ""
+
 replicaCount: 2
 
 image:
