@@ -36,6 +36,8 @@ type CollectionResult struct {
 	PSPReference string
 	Status       string
 	NextAction   *NextAction
+	RawRequest   []byte
+	RawResponse  []byte
 }
 
 type NextAction struct {
@@ -79,12 +81,13 @@ type PayoutResult struct {
 }
 
 type WebhookEvent struct {
-	PSP          string
-	EventType    string
-	PSPReference string
-	DedupKey     string
-	Status       string
-	AmountMinor  int64
-	Currency     string
-	RawPayload   []byte
+	PSP              string
+	EventType        string
+	PSPReference     string
+	PSPTransactionID string
+	DedupKey         string
+	Status           string
+	AmountMinor      int64
+	Currency         string
+	RawPayload       []byte
 }

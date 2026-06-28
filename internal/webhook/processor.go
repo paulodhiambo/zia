@@ -33,6 +33,10 @@ func NewProcessor(
 	}
 }
 
+func (p *Processor) HandleEvent(ctx context.Context, event connector.WebhookEvent) error {
+	return p.orc.HandleWebhookEvent(ctx, event)
+}
+
 func (p *Processor) Publish(ctx context.Context, event connector.WebhookEvent) error {
 	data, err := json.Marshal(event)
 	if err != nil {

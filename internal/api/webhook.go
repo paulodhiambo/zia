@@ -15,6 +15,13 @@ import (
 	"go.uber.org/zap"
 )
 
+func truncateBytes(b []byte, maxLen int) []byte {
+	if len(b) <= maxLen {
+		return b
+	}
+	return b[:maxLen]
+}
+
 type WebhookHandler struct {
 	registry  *connector.Registry
 	whRepo    repository.WebhookEventRepository
@@ -68,18 +75,11 @@ func (h *WebhookHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 
 	event, err := conn.ParseWebhook(r.Context(), headers, body)
 	if err != nil {
-		h.logger.Warn("webhook signature verification failed",
+		h.logger.Error("webhook parse failed",
 			zap.String("psp", psp),
+			zap.ByteString("body", truncateBytes(body, 1000)),
 			zap.Error(err),
 		)
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	seen, err := h.dedup.Check(r.Context(), event.DedupKey)
-	if err != nil {
-		h.logger.Error("dedup check failed", zap.Error(err))
-	} else if seen {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -97,13 +97,11 @@ func (h *WebhookHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.whRepo.Create(r.Context(), wh); err != nil {
-		h.logger.Error("failed to persist webhook event", zap.Error(err))
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := h.dedup.Mark(r.Context(), event.DedupKey); err != nil {
-		h.logger.Error("failed to mark dedup", zap.Error(err))
+		h.logger.Error("failed to persist webhook event (may be duplicate)", zap.Error(err))
+	} else {
+		if err := h.dedup.Mark(r.Context(), event.DedupKey); err != nil {
+			h.logger.Error("failed to mark dedup", zap.Error(err))
+		}
 	}
 
 	hook, _ := json.Marshal(event)
@@ -118,6 +116,14 @@ func (h *WebhookHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 	if err := h.publisher.Publish(r.Context(), event); err != nil {
 		h.logger.Error("failed to publish webhook event to nats",
 			zap.String("psp", psp),
+			zap.Error(err),
+		)
+	}
+
+	if err := h.publisher.HandleEvent(r.Context(), event); err != nil {
+		h.logger.Error("failed to process webhook event",
+			zap.String("psp", psp),
+			zap.String("psp_reference", event.PSPReference),
 			zap.Error(err),
 		)
 	}

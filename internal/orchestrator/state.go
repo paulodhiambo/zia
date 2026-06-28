@@ -4,7 +4,7 @@ import "zia/internal/domain"
 
 var transitions = map[domain.PaymentIntentStatus][]domain.PaymentIntentStatus{
 	domain.PICreated:        {domain.PIRequiresAction, domain.PIProcessing, domain.PIFailed, domain.PIExpired},
-	domain.PIRequiresAction: {domain.PIProcessing, domain.PIFailed, domain.PIExpired},
+	domain.PIRequiresAction: {domain.PISucceeded, domain.PIProcessing, domain.PIFailed, domain.PIExpired},
 	domain.PIProcessing:     {domain.PISucceeded, domain.PIFailed, domain.PIRequiresAction},
 	domain.PISucceeded:      {domain.PIPartiallyRefunded, domain.PIRefunded},
 }

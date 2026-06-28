@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"zia/internal/connector"
+
+	"go.uber.org/zap"
 )
 
 type Config struct {
@@ -30,15 +33,17 @@ type Connector struct {
 	config Config
 	http   *http.Client
 	auth   *TokenManager
+	logger *zap.Logger
 }
 
-func New(cfg Config) *Connector {
+func New(cfg Config, logger *zap.Logger) *Connector {
 	return &Connector{
 		config: cfg,
 		http: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		auth: NewTokenManager(cfg),
+		auth:   NewTokenManager(cfg, logger),
+		logger: logger,
 	}
 }
 
@@ -85,8 +90,19 @@ type stkPushResponse struct {
 }
 
 func (c *Connector) InitiateCollection(ctx context.Context, req connector.CollectionRequest) (connector.CollectionResult, error) {
+	c.logger.Info("mpesa InitiateCollection",
+		zap.String("pi_id", req.PaymentIntentID),
+		zap.Int64("amount_minor", req.AmountMinor),
+		zap.String("currency", req.Currency),
+		zap.String("phone", req.CustomerPhone),
+	)
+
 	token, err := c.auth.Token(ctx)
 	if err != nil {
+		c.logger.Error("mpesa auth token failed",
+			zap.String("pi_id", req.PaymentIntentID),
+			zap.Error(err),
+		)
 		return connector.CollectionResult{}, fmt.Errorf("auth: %w", err)
 	}
 
@@ -113,6 +129,11 @@ func (c *Connector) InitiateCollection(ctx context.Context, req connector.Collec
 	}
 
 	data, _ := json.Marshal(body)
+
+	sanitized := body
+	sanitized.Password = "****"
+	sanitizedData, _ := json.Marshal(sanitized)
+
 	httpReq, err := http.NewRequestWithContext(ctx, "POST",
 		c.baseURL()+"/mpesa/stkpush/v1/processrequest",
 		bytes.NewReader(data))
@@ -122,13 +143,29 @@ func (c *Connector) InitiateCollection(ctx context.Context, req connector.Collec
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("Content-Type", "application/json")
 
+	c.logger.Info("mpesa stk push request",
+		zap.String("url", c.baseURL()+"/mpesa/stkpush/v1/processrequest"),
+		zap.String("short_code", c.config.ShortCode),
+		zap.Int64("amount", req.AmountMinor),
+		zap.String("phone", req.CustomerPhone),
+	)
+
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
+		c.logger.Error("mpesa stk push http failed",
+			zap.String("pi_id", req.PaymentIntentID),
+			zap.Error(err),
+		)
 		return connector.CollectionResult{}, fmt.Errorf("stk push request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
+
+	c.logger.Info("mpesa stk push response",
+		zap.Int("status", resp.StatusCode),
+		zap.ByteString("body", respBody),
+	)
 
 	if resp.StatusCode != http.StatusOK {
 		return connector.CollectionResult{},
@@ -137,10 +174,26 @@ func (c *Connector) InitiateCollection(ctx context.Context, req connector.Collec
 
 	var stkResp stkPushResponse
 	if err := json.Unmarshal(respBody, &stkResp); err != nil {
+		c.logger.Error("mpesa stk push json parse failed",
+			zap.Int("status", resp.StatusCode),
+			zap.ByteString("body", respBody),
+			zap.Error(err),
+		)
 		return connector.CollectionResult{}, fmt.Errorf("parse stk response: %w", err)
 	}
 
+	c.logger.Info("mpesa stk push parsed",
+		zap.String("merchant_request_id", stkResp.MerchantRequestID),
+		zap.String("checkout_request_id", stkResp.CheckoutRequestID),
+		zap.String("response_code", stkResp.ResponseCode),
+		zap.String("response_description", stkResp.ResponseDescription),
+	)
+
 	if stkResp.ResponseCode != "0" {
+		c.logger.Error("mpesa stk push rejected",
+			zap.String("response_code", stkResp.ResponseCode),
+			zap.String("response_description", stkResp.ResponseDescription),
+		)
 		return connector.CollectionResult{},
 			fmt.Errorf("stk push rejected: code=%s desc=%s", stkResp.ResponseCode, stkResp.ResponseDescription)
 	}
@@ -148,10 +201,16 @@ func (c *Connector) InitiateCollection(ctx context.Context, req connector.Collec
 	return connector.CollectionResult{
 		PSPReference: stkResp.CheckoutRequestID,
 		Status:       "requires_action",
+		RawRequest:   sanitizedData,
+		RawResponse:  respBody,
 	}, nil
 }
 
 func (c *Connector) GetStatus(ctx context.Context, pspReference string) (connector.StatusResult, error) {
+	c.logger.Info("mpesa GetStatus",
+		zap.String("psp_reference", pspReference),
+	)
+
 	token, err := c.auth.Token(ctx)
 	if err != nil {
 		return connector.StatusResult{}, fmt.Errorf("auth: %w", err)
@@ -177,13 +236,27 @@ func (c *Connector) GetStatus(ctx context.Context, pspReference string) (connect
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("Content-Type", "application/json")
 
+	c.logger.Info("mpesa query request",
+		zap.String("url", c.baseURL()+"/mpesa/stkpushquery/v1/query"),
+		zap.String("psp_reference", pspReference),
+	)
+
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
+		c.logger.Error("mpesa query http failed",
+			zap.String("psp_reference", pspReference),
+			zap.Error(err),
+		)
 		return connector.StatusResult{}, fmt.Errorf("query request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
+
+	c.logger.Info("mpesa query response",
+		zap.Int("status", resp.StatusCode),
+		zap.ByteString("body", respBody),
+	)
 
 	var queryResp struct {
 		ResponseCode        string `json:"ResponseCode"`
@@ -191,8 +264,19 @@ func (c *Connector) GetStatus(ctx context.Context, pspReference string) (connect
 		ResultDesc          string `json:"ResultDesc"`
 	}
 	if err := json.Unmarshal(respBody, &queryResp); err != nil {
+		c.logger.Error("mpesa query json parse failed",
+			zap.Int("status", resp.StatusCode),
+			zap.ByteString("body", respBody),
+			zap.Error(err),
+		)
 		return connector.StatusResult{}, fmt.Errorf("parse query response: %w", err)
 	}
+
+	c.logger.Info("mpesa query parsed",
+		zap.String("response_code", queryResp.ResponseCode),
+		zap.String("result_code", queryResp.ResultCode),
+		zap.String("result_desc", queryResp.ResultDesc),
+	)
 
 	status := "failed"
 	if queryResp.ResultCode == "0" {
@@ -209,6 +293,12 @@ func (c *Connector) GetStatus(ctx context.Context, pspReference string) (connect
 }
 
 func (c *Connector) Refund(ctx context.Context, req connector.RefundRequest) (connector.RefundResult, error) {
+	c.logger.Info("mpesa Refund",
+		zap.String("pi_id", req.PaymentIntentID),
+		zap.Int64("amount_minor", req.AmountMinor),
+		zap.String("psp_reference", req.PSPReference),
+	)
+
 	token, err := c.auth.Token(ctx)
 	if err != nil {
 		return connector.RefundResult{}, fmt.Errorf("auth: %w", err)
@@ -235,14 +325,29 @@ func (c *Connector) Refund(ctx context.Context, req connector.RefundRequest) (co
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("Content-Type", "application/json")
 
+	c.logger.Info("mpesa b2c request",
+		zap.String("url", c.baseURL()+"/mpesa/b2c/v3/paymentrequest"),
+		zap.Int64("amount", req.AmountMinor),
+	)
+
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
+		c.logger.Error("mpesa b2c http failed",
+			zap.String("pi_id", req.PaymentIntentID),
+			zap.Error(err),
+		)
 		return connector.RefundResult{}, fmt.Errorf("b2c request: %w", err)
 	}
 	defer resp.Body.Close()
 
+	respBody, _ := io.ReadAll(resp.Body)
+	c.logger.Info("mpesa b2c response",
+		zap.Int("status", resp.StatusCode),
+		zap.ByteString("body", respBody),
+	)
+
 	if resp.StatusCode != http.StatusOK {
-		return connector.RefundResult{}, fmt.Errorf("b2c failed: status=%d", resp.StatusCode)
+		return connector.RefundResult{}, fmt.Errorf("b2c failed: status=%d body=%s", resp.StatusCode, string(respBody))
 	}
 
 	var b2cResp struct {
@@ -250,10 +355,19 @@ func (c *Connector) Refund(ctx context.Context, req connector.RefundRequest) (co
 		OriginatorConversationID string `json:"OriginatorConversationID"`
 		ResponseCode             string `json:"ResponseCode"`
 	}
-	respBody, _ := io.ReadAll(resp.Body)
 	if err := json.Unmarshal(respBody, &b2cResp); err != nil {
+		c.logger.Error("mpesa b2c json parse failed",
+			zap.Int("status", resp.StatusCode),
+			zap.ByteString("body", respBody),
+			zap.Error(err),
+		)
 		return connector.RefundResult{}, fmt.Errorf("parse b2c response: %w", err)
 	}
+
+	c.logger.Info("mpesa b2c parsed",
+		zap.String("response_code", b2cResp.ResponseCode),
+		zap.String("conversation_id", b2cResp.ConversationID),
+	)
 
 	if b2cResp.ResponseCode != "0" {
 		return connector.RefundResult{}, fmt.Errorf("b2c rejected: code=%s", b2cResp.ResponseCode)
@@ -270,6 +384,11 @@ func (c *Connector) InitiatePayout(ctx context.Context, req connector.PayoutRequ
 }
 
 func (c *Connector) ParseWebhook(ctx context.Context, headers map[string]string, body []byte) (connector.WebhookEvent, error) {
+	c.logger.Info("mpesa ParseWebhook",
+		zap.Int("body_len", len(body)),
+		zap.ByteString("body_preview", truncateBytes(body, 500)),
+	)
+
 	var callback struct {
 		Body struct {
 			StkCallback struct {
@@ -280,7 +399,7 @@ func (c *Connector) ParseWebhook(ctx context.Context, headers map[string]string,
 				CallbackMetadata  *struct {
 					Item []struct {
 						Name  string      `json:"Name"`
-						Value json.Number `json:"Value"`
+						Value interface{} `json:"Value"`
 					} `json:"Item"`
 				} `json:"CallbackMetadata"`
 			} `json:"stkCallback"`
@@ -288,23 +407,32 @@ func (c *Connector) ParseWebhook(ctx context.Context, headers map[string]string,
 	}
 
 	if err := json.Unmarshal(body, &callback); err != nil {
+		c.logger.Error("mpesa webhook json parse failed",
+			zap.ByteString("body", body),
+			zap.Error(err),
+		)
 		return connector.WebhookEvent{}, fmt.Errorf("parse mpesa callback: %w", err)
 	}
 
 	sc := callback.Body.StkCallback
 	dedupKey := sc.MerchantRequestID + ":" + sc.CheckoutRequestID
 
-	var pspReference string
+	c.logger.Info("mpesa webhook parsed",
+		zap.String("merchant_request_id", sc.MerchantRequestID),
+		zap.String("checkout_request_id", sc.CheckoutRequestID),
+		zap.Int("result_code", sc.ResultCode),
+		zap.String("result_desc", sc.ResultDesc),
+	)
+
+	var pspTransactionID string
 	var amountMinor int64
 	if sc.CallbackMetadata != nil {
 		for _, item := range sc.CallbackMetadata.Item {
 			switch item.Name {
 			case "MpesaReceiptNumber":
-				pspReference = item.Value.String()
+				pspTransactionID = valueToString(item.Value)
 			case "Amount":
-				if v, err := item.Value.Int64(); err == nil {
-					amountMinor = v
-				}
+				amountMinor = valueToInt64(item.Value)
 			}
 		}
 	}
@@ -321,19 +449,23 @@ func (c *Connector) ParseWebhook(ctx context.Context, headers map[string]string,
 		status = "failed"
 	}
 
-	if pspReference == "" {
-		pspReference = sc.CheckoutRequestID
-	}
+	c.logger.Info("mpesa webhook mapped",
+		zap.String("checkout_request_id", sc.CheckoutRequestID),
+		zap.String("receipt_number", pspTransactionID),
+		zap.String("status", status),
+		zap.Int64("amount_minor", amountMinor),
+	)
 
 	return connector.WebhookEvent{
-		PSP:          "mpesa",
-		EventType:    "stk_callback",
-		PSPReference: pspReference,
-		DedupKey:     dedupKey,
-		Status:       status,
-		AmountMinor:  amountMinor,
-		Currency:     "KES",
-		RawPayload:   body,
+		PSP:              "mpesa",
+		EventType:        "stk_callback",
+		PSPReference:     sc.CheckoutRequestID,
+		PSPTransactionID: pspTransactionID,
+		DedupKey:         dedupKey,
+		Status:           status,
+		AmountMinor:      amountMinor,
+		Currency:         "KES",
+		RawPayload:       body,
 	}, nil
 }
 
@@ -347,5 +479,46 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen]
+}
+
+func truncateBytes(b []byte, maxLen int) []byte {
+	if len(b) <= maxLen {
+		return b
+	}
+	return b[:maxLen]
+}
+
+func valueToString(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	switch val := v.(type) {
+	case string:
+		return val
+	case json.Number:
+		return val.String()
+	case float64:
+		return strconv.FormatFloat(val, 'f', -1, 64)
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+func valueToInt64(v interface{}) int64 {
+	if v == nil {
+		return 0
+	}
+	switch val := v.(type) {
+	case float64:
+		return int64(val)
+	case json.Number:
+		n, _ := val.Int64()
+		return n
+	case string:
+		n, _ := strconv.ParseInt(val, 10, 64)
+		return n
+	default:
+		return 0
+	}
 }
 

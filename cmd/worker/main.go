@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"zia/internal/connector"
@@ -113,7 +114,7 @@ func main() {
 	registry := connector.NewRegistry()
 
 	if cfg := mpesa.ConfigFromEnv(); cfg.ConsumerKey != "" {
-		registry.Register("mpesa", mpesa.New(cfg))
+		registry.Register("mpesa", mpesa.New(cfg, logger))
 		logger.Info("registered mpesa connector")
 	}
 	if cfg := kcb.ConfigFromEnv(); cfg.ConsumerKey != "" {
@@ -129,6 +130,15 @@ func main() {
 		logger.Info("registered pesalink connector")
 	}
 
+	feePercent, _ := strconv.Atoi(os.Getenv("PLATFORM_FEE_PERCENT"))
+	if feePercent <= 0 {
+		feePercent = 5
+	}
+	feeMin, _ := strconv.Atoi(os.Getenv("PLATFORM_FEE_MIN"))
+	if feeMin <= 0 {
+		feeMin = 100
+	}
+
 	orc := orchestrator.New(
 		piRepo,
 		attRepo,
@@ -139,6 +149,10 @@ func main() {
 		logger,
 		ledgerEng,
 		notifDispatcher,
+		orchestrator.FeeConfig{
+			Percent:   feePercent,
+			MinAmount: int64(feeMin),
+		},
 	)
 
 	processor := webhook.NewProcessor(orc, js, logger)

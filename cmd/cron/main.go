@@ -81,7 +81,7 @@ func main() {
 	registry := connector.NewRegistry()
 
 	if cfg := mpesa.ConfigFromEnv(); cfg.ConsumerKey != "" {
-		registry.Register("mpesa", mpesa.New(cfg))
+		registry.Register("mpesa", mpesa.New(cfg, logger))
 		logger.Info("registered mpesa connector")
 	}
 	if cfg := kcb.ConfigFromEnv(); cfg.ConsumerKey != "" {

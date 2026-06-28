@@ -5,11 +5,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
-	"net/url"
-	"strings"
+	"strconv"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 type TokenManager struct {
@@ -17,10 +19,11 @@ type TokenManager struct {
 	mu        sync.Mutex
 	token     string
 	expiresAt time.Time
+	logger    *zap.Logger
 }
 
-func NewTokenManager(cfg Config) *TokenManager {
-	return &TokenManager{cfg: cfg}
+func NewTokenManager(cfg Config, logger *zap.Logger) *TokenManager {
+	return &TokenManager{cfg: cfg, logger: logger}
 }
 
 func (t *TokenManager) Token(ctx context.Context) (string, error) {
@@ -51,17 +54,12 @@ func (t *TokenManager) fetchToken(ctx context.Context) (string, int, error) {
 		[]byte(t.cfg.ConsumerKey + ":" + t.cfg.ConsumerSecret),
 	)
 
-	form := url.Values{}
-	form.Set("grant_type", "client_credentials")
-
-	req, err := http.NewRequestWithContext(ctx, "POST",
-		baseURL+"/oauth/v1/generate?grant_type=client_credentials",
-		strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		baseURL+"/oauth/v1/generate?grant_type=client_credentials", nil)
 	if err != nil {
 		return "", 0, err
 	}
 	req.Header.Set("Authorization", "Basic "+auth)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -69,17 +67,36 @@ func (t *TokenManager) fetchToken(ctx context.Context) (string, int, error) {
 	}
 	defer resp.Body.Close()
 
+	body, _ := io.ReadAll(resp.Body)
+	t.logger.Info("mpesa auth response",
+		zap.Int("status", resp.StatusCode),
+		zap.ByteString("body", body),
+	)
+
 	if resp.StatusCode != http.StatusOK {
-		return "", 0, fmt.Errorf("mpesa auth failed: status=%d", resp.StatusCode)
+		return "", 0, fmt.Errorf("mpesa auth failed: status=%d body=%s", resp.StatusCode, string(body))
 	}
 
 	var result struct {
 		AccessToken string `json:"access_token"`
-		ExpiresIn   int    `json:"expires_in"`
+		ExpiresIn   string `json:"expires_in"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", 0, err
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.logger.Error("mpesa auth json parse failed",
+			zap.Int("status", resp.StatusCode),
+			zap.ByteString("body", body),
+			zap.Error(err),
+		)
+		return "", 0, fmt.Errorf("parse auth response: %w body=%s", err, string(body))
 	}
 
-	return result.AccessToken, result.ExpiresIn, nil
+	expiresIn, err := strconv.Atoi(result.ExpiresIn)
+	if err != nil {
+		t.logger.Warn("mpesa auth non-numeric expires_in",
+			zap.String("raw", result.ExpiresIn),
+		)
+		expiresIn = 3599
+	}
+
+	return result.AccessToken, expiresIn, nil
 }

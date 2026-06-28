@@ -10,14 +10,16 @@ import (
 	"zia/internal/service"
 
 	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
 )
 
 type PaymentIntentHandler struct {
-	svc *service.PaymentIntentService
+	svc    *service.PaymentIntentService
+	logger *zap.Logger
 }
 
-func NewPaymentIntentHandler(svc *service.PaymentIntentService) *PaymentIntentHandler {
-	return &PaymentIntentHandler{svc: svc}
+func NewPaymentIntentHandler(svc *service.PaymentIntentService, logger *zap.Logger) *PaymentIntentHandler {
+	return &PaymentIntentHandler{svc: svc, logger: logger}
 }
 
 type createPIRequest struct {
@@ -92,21 +94,44 @@ func (h *PaymentIntentHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	orcReq := orchestrator.CreatePIRequest{
-		MerchantID:    merchantID,
-		AmountMinor:   req.AmountMinor,
-		Currency:      req.Currency,
-		Method:        domain.PaymentMethod(req.Method),
-		CustomerRef:   req.CustomerRef,
-		CustomerPhone: req.CustomerPhone,
-		CustomerEmail: req.CustomerEmail,
+		MerchantID:     merchantID,
+		AmountMinor:    req.AmountMinor,
+		Currency:       req.Currency,
+		Method:         domain.PaymentMethod(req.Method),
+		CustomerRef:    req.CustomerRef,
+		CustomerPhone:  req.CustomerPhone,
+		CustomerEmail:  req.CustomerEmail,
 		IdempotencyKey: env.MessageID,
 	}
 
+	h.logger.Info("payment intent create request",
+		zap.String("merchant_id", merchantID),
+		zap.Int64("amount_minor", req.AmountMinor),
+		zap.String("currency", req.Currency),
+		zap.String("method", req.Method),
+		zap.String("customer_phone", req.CustomerPhone),
+		zap.String("customer_email", req.CustomerEmail),
+		zap.String("idempotency_key", env.MessageID),
+	)
+
 	result, err := h.svc.Create(r.Context(), orcReq)
 	if err != nil {
+		h.logger.Error("payment intent create failed",
+			zap.Int64("amount_minor", req.AmountMinor),
+			zap.String("currency", req.Currency),
+			zap.String("method", req.Method),
+			zap.Error(err),
+		)
 		respondError(w, r, http.StatusUnprocessableEntity, "1005", err.Error())
 		return
 	}
+
+	h.logger.Info("payment intent created",
+		zap.String("pi_id", result.PaymentIntent.ID),
+		zap.String("status", string(result.PaymentIntent.Status)),
+		zap.String("merchant_id", merchantID),
+		zap.Int64("amount_minor", req.AmountMinor),
+	)
 
 	resp := piResponse{
 		ID:            result.PaymentIntent.ID,

@@ -76,12 +76,32 @@ func (h *CheckoutHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.logger.Info("checkout create request",
+		zap.String("merchant_id", merchantID),
+		zap.Int64("amount_minor", req.AmountMinor),
+		zap.String("currency", req.Currency),
+		zap.String("customer_phone", req.CustomerPhone),
+		zap.String("customer_email", req.CustomerEmail),
+		zap.String("callback_url", req.CallbackURL),
+	)
+
 	piResult, err := h.svc.Create(r.Context(), buildPIRequest(merchantID, req))
 	if err != nil {
-		h.logger.Error("create payment intent for checkout", zap.Error(err))
+		h.logger.Error("create payment intent for checkout",
+			zap.String("merchant_id", merchantID),
+			zap.Int64("amount_minor", req.AmountMinor),
+			zap.String("currency", req.Currency),
+			zap.Error(err),
+		)
 		respondError(w, r, http.StatusInternalServerError, "500", "failed to create payment")
 		return
 	}
+
+	h.logger.Info("checkout payment intent created",
+		zap.String("pi_id", piResult.PaymentIntent.ID),
+		zap.String("status", string(piResult.PaymentIntent.Status)),
+		zap.String("merchant_id", merchantID),
+	)
 
 	now := time.Now().UTC()
 	token := "cs_" + uuid.New().String()
@@ -101,10 +121,21 @@ func (h *CheckoutHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.checkout.Create(r.Context(), session); err != nil {
-		h.logger.Error("create checkout session", zap.Error(err))
+		h.logger.Error("create checkout session",
+			zap.String("pi_id", piResult.PaymentIntent.ID),
+			zap.String("token", token),
+			zap.Error(err),
+		)
 		respondError(w, r, http.StatusInternalServerError, "500", "failed to create checkout session")
 		return
 	}
+
+	h.logger.Info("checkout session created",
+		zap.String("token", token),
+		zap.String("pi_id", piResult.PaymentIntent.ID),
+		zap.String("status", string(piResult.PaymentIntent.Status)),
+		zap.String("expires_at", session.ExpiresAt.Format(time.RFC3339)),
+	)
 
 	respond(w, r, http.StatusCreated, map[string]any{
 		"token":          token,
@@ -120,15 +151,26 @@ func (h *CheckoutHandler) Status(w http.ResponseWriter, r *http.Request) {
 
 	session, err := h.checkout.GetByToken(r.Context(), token)
 	if err != nil {
+		h.logger.Warn("checkout session not found", zap.String("token", token))
 		respondError(w, r, http.StatusNotFound, "404", "checkout session not found")
 		return
 	}
 
 	pi, err := h.piRepo.GetByID(r.Context(), session.PaymentIntentID)
 	if err != nil {
+		h.logger.Warn("payment intent not found for checkout session",
+			zap.String("token", token),
+			zap.String("pi_id", session.PaymentIntentID),
+		)
 		respondError(w, r, http.StatusNotFound, "404", "payment not found")
 		return
 	}
+
+	h.logger.Info("checkout status polled",
+		zap.String("token", token),
+		zap.String("pi_id", pi.ID),
+		zap.String("status", string(pi.Status)),
+	)
 
 	respond(w, r, http.StatusOK, map[string]any{
 		"token":          token,
