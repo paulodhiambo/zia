@@ -69,13 +69,6 @@ func (e *Engine) setDefaultRules() {
 			Enabled:    true,
 		},
 		{
-			Priority:   2,
-			Conditions: Condition{Method: "card", Currency: "KES"},
-			PrimaryPSP: "paystack",
-			Fallbacks:  []string{},
-			Enabled:    true,
-		},
-		{
 			Priority:   3,
 			Conditions: Condition{Method: "card"},
 			PrimaryPSP: "paystack",

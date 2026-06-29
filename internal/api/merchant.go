@@ -36,8 +36,18 @@ func NewMerchantHandler(
 	}
 }
 
+func merchantID(r *http.Request) (string, bool) {
+	id, ok := r.Context().Value(authn.MerchantIDKey).(string)
+	return id, ok && id != ""
+}
+
 func (h *MerchantHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
-	merchantID := r.Context().Value(authn.MerchantIDKey).(string)
+	mID, ok := merchantID(r)
+	if !ok {
+		respondError(w, r, http.StatusUnauthorized, "1002", "unauthorized")
+		return
+	}
+	merchantID := mID
 
 	merchant, err := h.merchantRepo.GetByID(r.Context(), merchantID)
 	if err != nil {
@@ -72,7 +82,11 @@ func (h *MerchantHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *MerchantHandler) ListTransactions(w http.ResponseWriter, r *http.Request) {
-	merchantID := r.Context().Value(authn.MerchantIDKey).(string)
+	merchantID, ok := merchantID(r)
+	if !ok {
+		respondError(w, r, http.StatusUnauthorized, "1002", "unauthorized")
+		return
+	}
 
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 100 {
@@ -98,7 +112,11 @@ func (h *MerchantHandler) ListTransactions(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *MerchantHandler) GetBalance(w http.ResponseWriter, r *http.Request) {
-	merchantID := r.Context().Value(authn.MerchantIDKey).(string)
+	merchantID, ok := merchantID(r)
+	if !ok {
+		respondError(w, r, http.StatusUnauthorized, "1002", "unauthorized")
+		return
+	}
 
 	available, _ := h.ledgerRepo.Balance(r.Context(), ledger.MerchantAvailable(merchantID))
 	inTransit, _ := h.ledgerRepo.Balance(r.Context(), ledger.MerchantInTransit(merchantID))
@@ -110,7 +128,11 @@ func (h *MerchantHandler) GetBalance(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *MerchantHandler) ListPayouts(w http.ResponseWriter, r *http.Request) {
-	merchantID := r.Context().Value(authn.MerchantIDKey).(string)
+	merchantID, ok := merchantID(r)
+	if !ok {
+		respondError(w, r, http.StatusUnauthorized, "1002", "unauthorized")
+		return
+	}
 
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 100 {
@@ -140,7 +162,11 @@ type updateSettingsRequest struct {
 }
 
 func (h *MerchantHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
-	merchantID := r.Context().Value(authn.MerchantIDKey).(string)
+	merchantID, ok := merchantID(r)
+	if !ok {
+		respondError(w, r, http.StatusUnauthorized, "1002", "unauthorized")
+		return
+	}
 
 	var env RequestEnvelope
 	if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
@@ -158,19 +184,16 @@ func (h *MerchantHandler) UpdateSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	merchant, err := h.merchantRepo.GetByID(r.Context(), merchantID)
-	if err != nil {
-		respondError(w, r, http.StatusNotFound, "404", "merchant not found")
-		return
-	}
-
 	type settings struct {
 		WebhookURL string `json:"webhook_url"`
 	}
-	s := settings(req)
+	data, _ := json.Marshal(settings(req))
 
-	data, _ := json.Marshal(s)
-	merchant.SettlementConfig = data
+	if err := h.merchantRepo.UpdateSettlementConfig(r.Context(), merchantID, data); err != nil {
+		h.logger.Error("update settlement config", zap.Error(err))
+		respondError(w, r, http.StatusInternalServerError, "500", "failed to save settings")
+		return
+	}
 
 	respond(w, r, http.StatusOK, map[string]string{
 		"status":     "updated",
@@ -179,7 +202,11 @@ func (h *MerchantHandler) UpdateSettings(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *MerchantHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
-	merchantID := r.Context().Value(authn.MerchantIDKey).(string)
+	merchantID, ok := merchantID(r)
+	if !ok {
+		respondError(w, r, http.StatusUnauthorized, "1002", "unauthorized")
+		return
+	}
 
 	merchant, err := h.merchantRepo.GetByID(r.Context(), merchantID)
 	if err != nil {

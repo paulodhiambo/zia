@@ -119,7 +119,7 @@ func (c *Connector) InitiateCollection(ctx context.Context, req connector.Collec
 		Password:          password,
 		Timestamp:         timestamp,
 		TransactionType:   "CustomerPayBillOnline",
-		Amount:            req.AmountMinor,
+		Amount:            req.AmountMinor / 100, // Daraja expects whole KES, not minor units
 		PartyA:            req.CustomerPhone,
 		PartyB:            c.config.ShortCode,
 		PhoneNumber:       req.CustomerPhone,

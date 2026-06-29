@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"time"
@@ -104,29 +103,29 @@ func (h *WebhookHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	hook, _ := json.Marshal(event)
 	h.logger.Info("webhook received",
 		zap.String("psp", psp),
 		zap.String("event_type", event.EventType),
 		zap.String("psp_reference", event.PSPReference),
 		zap.String("dedup_key", event.DedupKey),
-		zap.ByteString("hook", hook),
 	)
 
-	if err := h.publisher.Publish(r.Context(), event); err != nil {
-		h.logger.Error("failed to publish webhook event to nats",
-			zap.String("psp", psp),
-			zap.Error(err),
-		)
-	}
-
-	if err := h.publisher.HandleEvent(r.Context(), event); err != nil {
-		h.logger.Error("failed to process webhook event",
-			zap.String("psp", psp),
-			zap.String("psp_reference", event.PSPReference),
-			zap.Error(err),
-		)
-	}
-
+	// Acknowledge the PSP immediately — they retry on non-2xx or slow responses.
 	w.WriteHeader(http.StatusOK)
+
+	// Publish to NATS for async processing by the worker. Fall back to synchronous
+	// processing when NATS is unavailable (e.g. local dev without the worker).
+	if err := h.publisher.Publish(r.Context(), event); err != nil {
+		h.logger.Warn("nats unavailable, processing webhook synchronously",
+			zap.String("psp", psp),
+			zap.Error(err),
+		)
+		if err := h.publisher.HandleEvent(r.Context(), event); err != nil {
+			h.logger.Error("sync webhook processing failed",
+				zap.String("psp", psp),
+				zap.String("psp_reference", event.PSPReference),
+				zap.Error(err),
+			)
+		}
+	}
 }

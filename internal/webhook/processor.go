@@ -37,7 +37,15 @@ func (p *Processor) HandleEvent(ctx context.Context, event connector.WebhookEven
 	return p.orc.HandleWebhookEvent(ctx, event)
 }
 
+func (p *Processor) CanPublish() bool {
+	return p.js != nil
+}
+
 func (p *Processor) Publish(ctx context.Context, event connector.WebhookEvent) error {
+	if p.js == nil {
+		return fmt.Errorf("jetstream not available")
+	}
+
 	data, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal webhook event: %w", err)
@@ -47,10 +55,6 @@ func (p *Processor) Publish(ctx context.Context, event connector.WebhookEvent) e
 		Subject: "zia.webhook.received",
 		Data:    data,
 		Header:  make(nats.Header),
-	}
-
-	if msg.Header == nil {
-		msg.Header = make(nats.Header)
 	}
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(msg.Header))
 

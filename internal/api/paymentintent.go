@@ -122,7 +122,7 @@ func (h *PaymentIntentHandler) Create(w http.ResponseWriter, r *http.Request) {
 			zap.String("method", req.Method),
 			zap.Error(err),
 		)
-		respondError(w, r, http.StatusUnprocessableEntity, "1005", err.Error())
+		respondError(w, r, http.StatusUnprocessableEntity, "1005", "payment initiation failed")
 		return
 	}
 

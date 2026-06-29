@@ -87,7 +87,7 @@ func (h *CheckoutHandler) Create(w http.ResponseWriter, r *http.Request) {
 		zap.String("callback_url", req.CallbackURL),
 	)
 
-	piResult, err := h.svc.Create(r.Context(), buildPIRequest(merchantID, req))
+	piResult, err := h.svc.Create(r.Context(), buildPIRequest(merchantID, env.MessageID, req))
 	if err != nil {
 		h.logger.Error("create payment intent for checkout",
 			zap.String("merchant_id", merchantID),
@@ -183,17 +183,18 @@ func (h *CheckoutHandler) Status(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func buildPIRequest(merchantID string, req createCheckoutRequest) orchestrator.CreatePIRequest {
+func buildPIRequest(merchantID, idempotencyKey string, req createCheckoutRequest) orchestrator.CreatePIRequest {
 	method := req.Method
 	if method == "" {
 		method = "mpesa_stk"
 	}
 	return orchestrator.CreatePIRequest{
-		MerchantID:    merchantID,
-		AmountMinor:   req.AmountMinor,
-		Currency:      req.Currency,
-		Method:        domain.PaymentMethod(method),
-		CustomerPhone: req.CustomerPhone,
-		CustomerEmail: req.CustomerEmail,
+		MerchantID:     merchantID,
+		AmountMinor:    req.AmountMinor,
+		Currency:       req.Currency,
+		Method:         domain.PaymentMethod(method),
+		CustomerPhone:  req.CustomerPhone,
+		CustomerEmail:  req.CustomerEmail,
+		IdempotencyKey: idempotencyKey,
 	}
 }

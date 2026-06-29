@@ -91,7 +91,7 @@ func (r *userRepo) GetByEmail(ctx context.Context, merchantID, email string) (*d
 }
 func (r *userRepo) GetByEmailGlobal(ctx context.Context, email string) (*domain.User, error) {
 	u := &domain.User{}
-	err := r.db.QueryRow(ctx, `SELECT id,merchant_id,name,email,password_hash,title,phone,role,created_at FROM users WHERE email=$1 LIMIT 1`, email).
+	err := r.db.QueryRow(ctx, `SELECT id,merchant_id,name,email,password_hash,title,phone,role,created_at FROM users WHERE email=$1 ORDER BY created_at DESC LIMIT 1`, email).
 		Scan(&u.ID, &u.MerchantID, &u.Name, &u.Email, &u.PasswordHash, &u.Title, &u.Phone, &u.Role, &u.CreatedAt)
 	if err != nil {
 		return nil, err

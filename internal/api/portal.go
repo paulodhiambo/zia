@@ -141,7 +141,7 @@ func PortalAuth(repo repository.SessionRepository) func(http.Handler) http.Handl
 			token := strings.TrimPrefix(auth, "Bearer ")
 			session, err := repo.GetByToken(r.Context(), token)
 			if err != nil {
-				respondError(w, r, http.StatusUnauthorized, "1002", "Invalid email or password")
+				respondError(w, r, http.StatusUnauthorized, "1002", "Invalid or expired session")
 				return
 			}
 			ctx := context.WithValue(r.Context(), portalUserID, session.UserID)
@@ -229,6 +229,10 @@ func (h *PortalHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := h.sessionRepo.DeleteByUserID(r.Context(), user.ID); err != nil {
+		h.logger.Warn("failed to clear old sessions", zap.String("user_id", user.ID), zap.Error(err))
+	}
+
 	session := &domain.Session{
 		ID:        uuid.New().String(),
 		UserID:    user.ID,
@@ -259,15 +263,6 @@ func (h *PortalHandler) Login(w http.ResponseWriter, r *http.Request) {
 			"title": user.Title,
 		},
 		"workspace": map[string]any{
-			"id":              merchant.ID,
-			"code":            merchant.Code,
-			"legalName":       merchant.LegalName,
-			"country":         merchant.Country,
-			"defaultCurrency": merchant.DefaultCurrency,
-			"status":          merchant.Status,
-			"createdAt":       merchant.CreatedAt,
-		},
-		"merchant": map[string]any{
 			"id":              merchant.ID,
 			"code":            merchant.Code,
 			"legalName":       merchant.LegalName,
@@ -364,6 +359,10 @@ func (h *PortalHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		respondPortalError(w, r, http.StatusBadRequest, "1001", "Name, email, password, phone and otp are required")
 		return
 	}
+	if !strings.Contains(data.Email, "@") || !strings.Contains(data.Email, ".") {
+		respondPortalError(w, r, http.StatusBadRequest, "1001", "Invalid email address")
+		return
+	}
 	if data.Country == "" {
 		data.Country = "KE"
 	}
@@ -376,8 +375,10 @@ func (h *PortalHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		respondPortalError(w, r, http.StatusBadRequest, "1001", "Invalid or expired OTP")
 		return
 	}
-	if entry.data != nil && entry.data.Phone != data.Phone {
-		respondPortalError(w, r, http.StatusBadRequest, "1001", "Phone mismatch")
+	// Reject if the client changed email between SendOTP and Signup — prevents
+	// reusing someone else's OTP verification for a different email address.
+	if entry.data.Email != data.Email {
+		respondPortalError(w, r, http.StatusBadRequest, "1001", "Email does not match OTP request")
 		return
 	}
 	h.otpStore.delete(data.Phone)
@@ -389,7 +390,7 @@ func (h *PortalHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
 		return
 	}
-	if err := h.merchantRepo.Create(r.Context(), &domain.Merchant{
+	merchant := &domain.Merchant{
 		ID:              merchantID,
 		Code:            merchantCode,
 		LegalName:       data.Company,
@@ -397,7 +398,8 @@ func (h *PortalHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		DefaultCurrency: data.Currency,
 		Status:          domain.MerchantActive,
 		CreatedAt:       time.Now(),
-	}); err != nil {
+	}
+	if err := h.merchantRepo.Create(r.Context(), merchant); err != nil {
 		h.logger.Error("merchant create", zap.Error(err))
 		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Failed to create workspace")
 		return
@@ -408,6 +410,11 @@ func (h *PortalHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
 		return
 	}
+	role := data.Role
+	if role == "" {
+		role = "owner"
+	}
+	title := strings.ToUpper(role[:1]) + role[1:]
 	user := &domain.User{
 		ID:           uuid.New().String(),
 		MerchantID:   merchantID,
@@ -415,8 +422,8 @@ func (h *PortalHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		Email:        data.Email,
 		Phone:        data.Phone,
 		PasswordHash: string(hash),
-		Role:         data.Role,
-		Title:        data.Role,
+		Role:         role,
+		Title:        title,
 		CreatedAt:    time.Now(),
 	}
 	if err := h.userRepo.Create(r.Context(), user); err != nil {
@@ -425,9 +432,39 @@ func (h *PortalHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Auto-login: issue a session so the client doesn't need a separate login call.
+	session := &domain.Session{
+		ID:        uuid.New().String(),
+		UserID:    user.ID,
+		Token:     uuid.New().String(),
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+		CreatedAt: time.Now(),
+	}
+	if err := h.sessionRepo.Create(r.Context(), session); err != nil {
+		h.logger.Error("session create after signup", zap.Error(err))
+		// Non-fatal: return success without a token; client can log in separately.
+		respond(w, r, http.StatusOK, map[string]any{"success": true, "merchantCode": merchantCode})
+		return
+	}
+
 	respond(w, r, http.StatusOK, map[string]any{
-		"success":      true,
-		"merchantCode": merchantCode,
+		"token": session.Token,
+		"user": map[string]string{
+			"id":    user.ID,
+			"name":  user.Name,
+			"email": user.Email,
+			"role":  user.Role,
+			"title": user.Title,
+		},
+		"workspace": map[string]any{
+			"id":              merchant.ID,
+			"code":            merchant.Code,
+			"legalName":       merchant.LegalName,
+			"country":         merchant.Country,
+			"defaultCurrency": merchant.DefaultCurrency,
+			"status":          merchant.Status,
+			"createdAt":       merchant.CreatedAt,
+		},
 	})
 }
 
@@ -705,8 +742,9 @@ func (h *PortalHandler) CreateCustomer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *PortalHandler) GetCustomer(w http.ResponseWriter, r *http.Request) {
+	merchantID := h.getMerchantID(r)
 	c, err := h.customerRepo.GetByID(r.Context(), r.PathValue("id"))
-	if err != nil {
+	if err != nil || c.MerchantID != merchantID {
 		respondPortalError(w, r, http.StatusNotFound, "1003", "Customer not found")
 		return
 	}
@@ -1092,7 +1130,9 @@ func (h *PortalHandler) GetNotificationPreferences(w http.ResponseWriter, r *htt
 		return
 	}
 	var data map[string]any
-	json.Unmarshal(prefs.Preferences, &data)
+	if err := json.Unmarshal(prefs.Preferences, &data); err != nil {
+		data = make(map[string]any)
+	}
 	respond(w, r, http.StatusOK, map[string]any{"preferences": data})
 }
 
@@ -1299,11 +1339,12 @@ func respondPortalError(w http.ResponseWriter, r *http.Request, httpStatus int, 
 }
 
 func otpCode() int {
-	var b [2]byte
+	var b [3]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return 123456
 	}
-	return 100000 + (int(b[0])<<8|int(b[1]))%900000
+	n := int(b[0])<<16 | int(b[1])<<8 | int(b[2]) // 0–16777215
+	return 100000 + n%900000
 }
 
 func generateMerchantCode() (string, error) {

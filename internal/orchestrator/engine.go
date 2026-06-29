@@ -154,11 +154,26 @@ func (e *Engine) CreatePaymentIntent(ctx context.Context, req CreatePIRequest) (
 
 	conn, ok := e.registry.Get(route.Primary)
 	if !ok {
-		e.logger.Error("connector not found in registry",
-			zap.String("psp", route.Primary),
+		e.logger.Warn("primary connector not registered, trying fallbacks",
+			zap.String("primary", route.Primary),
 			zap.String("merchant_id", req.MerchantID),
 		)
-		return nil, fmt.Errorf("connector %s not found in registry", route.Primary)
+		for _, fb := range route.Fallbacks {
+			if c, found := e.registry.Get(fb); found {
+				conn = c
+				route.Primary = fb
+				ok = true
+				e.logger.Info("switched to fallback connector", zap.String("fallback", fb))
+				break
+			}
+		}
+		if !ok {
+			e.logger.Error("no registered connector for method",
+				zap.String("method", string(req.Method)),
+				zap.String("merchant_id", req.MerchantID),
+			)
+			return nil, fmt.Errorf("no registered connector for method=%s", string(req.Method))
+		}
 	}
 
 	now := time.Now().UTC()

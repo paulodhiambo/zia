@@ -45,6 +45,9 @@ func (c *Connector) Capabilities() connector.Capabilities {
 }
 
 func (c *Connector) baseURL() string {
+	if c.config.Sandbox {
+		return "https://api.paystack.co" // Paystack uses the same domain; test keys route to sandbox
+	}
 	return "https://api.paystack.co"
 }
 
@@ -98,7 +101,9 @@ func (c *Connector) InitiateCollection(ctx context.Context, req connector.Collec
 			Type: "redirect",
 			URL:  paystackResp.Data.AuthorizationURL,
 		},
-		Status: "requires_action",
+		Status:      "requires_action",
+		RawRequest:  data,
+		RawResponse: respBody,
 	}, nil
 }
 
