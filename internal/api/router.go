@@ -64,7 +64,10 @@ func NewRouter(deps Dependencies) http.Handler {
 			api.Group(func(auth chi.Router) {
 				auth.Use(deps.SessionMiddleware)
 				auth.Get("/dashboard/overview", deps.PortalHandler.DashboardOverview)
+				auth.Get("/dashboard/volume", deps.PortalHandler.DashboardVolume)
 				auth.Get("/transactions", deps.PortalHandler.ListTransactions)
+				auth.Get("/transactions/export", deps.PortalHandler.ExportTransactionsCSV)
+				auth.Get("/transactions/{id}", deps.PortalHandler.GetTransaction)
 				auth.Get("/payouts", deps.PortalHandler.ListPayouts)
 				auth.Post("/payouts/create", deps.PortalHandler.CreatePayout)
 				auth.Get("/customers", deps.PortalHandler.ListCustomers)
@@ -79,6 +82,7 @@ func NewRouter(deps Dependencies) http.Handler {
 				auth.Post("/team/invitations/{token}/accept", deps.PortalHandler.AcceptInvitation)
 				auth.Get("/developer/keys", deps.PortalHandler.ListAPIKeys)
 				auth.Post("/developer/keys/create", deps.PortalHandler.CreateAPIKey)
+				auth.Delete("/developer/keys/{id}", deps.PortalHandler.RevokeAPIKey)
 				auth.Get("/developer/webhooks", deps.PortalHandler.ListWebhookEndpoints)
 				auth.Post("/developer/webhooks/create", deps.PortalHandler.CreateWebhookEndpoint)
 				auth.Get("/developer/webhooks/events", deps.PortalHandler.ListWebhookEvents)

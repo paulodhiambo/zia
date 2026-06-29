@@ -203,7 +203,7 @@ func main() {
 	merchantHandler := api.NewMerchantHandler(merchantRepo, piRepo, payoutRepo, ledRepo, logger)
 	checkoutHandler := api.NewCheckoutHandler(piSvc, checkoutRepo, piRepo, logger)
 	portalHandler := api.NewPortalHandler(
-		userRepo, sessionRepo, merchantRepo, piRepo, payoutRepo, ledRepo,
+		userRepo, sessionRepo, merchantRepo, piRepo, attRepo, payoutRepo, ledRepo,
 		customerRepo, teamMemberRepo, teamInviteRepo, webhookEPRepo, whRepo, notifRepo, logger,
 	)
 	authMiddleware := authn.Middleware(merchantRepo)

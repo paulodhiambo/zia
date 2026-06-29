@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -30,6 +31,7 @@ type PortalHandler struct {
 	sessionRepo      repository.SessionRepository
 	merchantRepo     repository.MerchantRepository
 	piRepo           repository.PaymentIntentRepository
+	attRepo          repository.AttemptRepository
 	payoutRepo       repository.PayoutRepository
 	ledgerRepo       repository.LedgerRepository
 	customerRepo     repository.CustomerRepository
@@ -156,6 +158,7 @@ func NewPortalHandler(
 	sessionRepo repository.SessionRepository,
 	merchantRepo repository.MerchantRepository,
 	piRepo repository.PaymentIntentRepository,
+	attRepo repository.AttemptRepository,
 	payoutRepo repository.PayoutRepository,
 	ledgerRepo repository.LedgerRepository,
 	customerRepo repository.CustomerRepository,
@@ -178,6 +181,7 @@ func NewPortalHandler(
 		sessionRepo:      sessionRepo,
 		merchantRepo:     merchantRepo,
 		piRepo:           piRepo,
+		attRepo:          attRepo,
 		payoutRepo:       payoutRepo,
 		ledgerRepo:       ledgerRepo,
 		customerRepo:     customerRepo,
@@ -539,18 +543,17 @@ func (h *PortalHandler) DashboardOverview(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	pis, _ := h.piRepo.ListByMerchant(r.Context(), merchantID, 500, 0)
-
 	todayStart := time.Now().UTC().Truncate(24 * time.Hour)
+
+	volumeRows, _ := h.piRepo.DailyVolume(r.Context(), merchantID, todayStart)
+
 	var todayVolume int64
-	var successCount int
-	for _, pi := range pis {
-		if pi.CreatedAt.After(todayStart) {
-			todayVolume += pi.Amount
-		}
-		if pi.Status == domain.PISucceeded {
-			successCount++
-		}
+	var todayCount int
+	var todaySuccess int
+	for _, vr := range volumeRows {
+		todayVolume += vr.Volume
+		todayCount += vr.Count
+		todaySuccess += vr.Successful
 	}
 
 	available, _ := h.ledgerRepo.Balance(r.Context(), ledger.MerchantAvailable(merchantID))
@@ -566,7 +569,8 @@ func (h *PortalHandler) DashboardOverview(w http.ResponseWriter, r *http.Request
 		"merchantCode":       merchant.Code,
 		"treasuryBalance":    float64(available),
 		"todayVolume":        float64(todayVolume),
-		"successfulPayments": successCount,
+		"todayTransactions":  todayCount,
+		"successfulPayments": todaySuccess,
 		"pendingPayouts":     float64(pendingPayouts),
 		"checklist": []map[string]any{
 			{"task": "Verify business entity", "status": "Done", "completed": true},
@@ -578,17 +582,76 @@ func (h *PortalHandler) DashboardOverview(w http.ResponseWriter, r *http.Request
 	})
 }
 
+func (h *PortalHandler) DashboardVolume(w http.ResponseWriter, r *http.Request) {
+	merchantID := h.getMerchantID(r)
+
+	days := 30
+	if d := r.URL.Query().Get("days"); d != "" {
+		if n, err := strconv.Atoi(d); err == nil && n > 0 && n <= 365 {
+			days = n
+		}
+	}
+
+	since := time.Now().UTC().AddDate(0, 0, -days)
+	rows, err := h.piRepo.DailyVolume(r.Context(), merchantID, since)
+	if err != nil {
+		h.logger.Error("dashboard volume", zap.Error(err))
+		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
+		return
+	}
+
+	daily := make([]map[string]any, 0, len(rows))
+	for _, r := range rows {
+		daily = append(daily, map[string]any{
+			"date":       r.Date.Format("2006-01-02"),
+			"volume":     float64(r.Volume),
+			"count":      r.Count,
+			"successful": r.Successful,
+			"failed":     r.Failed,
+		})
+	}
+
+	respond(w, r, http.StatusOK, map[string]any{"daily": daily})
+}
+
 // --- transactions ---
 
 func (h *PortalHandler) ListTransactions(w http.ResponseWriter, r *http.Request) {
 	merchantID := h.getMerchantID(r)
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	status := q.Get("status")
+	method := q.Get("method")
 
-	pis, err := h.piRepo.ListByMerchant(r.Context(), merchantID, limit, offset)
+	var dateFrom, dateTo *time.Time
+	if df := q.Get("date_from"); df != "" {
+		t, err := time.Parse(time.RFC3339, df)
+		if err == nil {
+			dateFrom = &t
+		}
+	}
+	if dt := q.Get("date_to"); dt != "" {
+		t, err := time.Parse(time.RFC3339, dt)
+		if err == nil {
+			dateTo = &t
+		}
+	}
+
+	f := repository.TransactionFilter{
+		Status:   status,
+		Method:   method,
+		DateFrom: dateFrom,
+		DateTo:   dateTo,
+		Limit:    limit,
+		Offset:   offset,
+	}
+
+	pis, err := h.piRepo.ListByMerchantFiltered(r.Context(), merchantID, f)
 	if err != nil {
 		h.logger.Error("list transactions", zap.Error(err))
 		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
@@ -609,6 +672,113 @@ func (h *PortalHandler) ListTransactions(w http.ResponseWriter, r *http.Request)
 	}
 
 	respond(w, r, http.StatusOK, map[string]any{"transactions": txs})
+}
+
+func (h *PortalHandler) ExportTransactionsCSV(w http.ResponseWriter, r *http.Request) {
+	merchantID := h.getMerchantID(r)
+
+	q := r.URL.Query()
+	status := q.Get("status")
+	method := q.Get("method")
+
+	var dateFrom, dateTo *time.Time
+	if df := q.Get("date_from"); df != "" {
+		t, err := time.Parse(time.RFC3339, df)
+		if err == nil {
+			dateFrom = &t
+		}
+	}
+	if dt := q.Get("date_to"); dt != "" {
+		t, err := time.Parse(time.RFC3339, dt)
+		if err == nil {
+			dateTo = &t
+		}
+	}
+
+	f := repository.TransactionFilter{
+		Status:   status,
+		Method:   method,
+		DateFrom: dateFrom,
+		DateTo:   dateTo,
+		Limit:    5000,
+	}
+
+	pis, err := h.piRepo.ListByMerchantFiltered(r.Context(), merchantID, f)
+	if err != nil {
+		h.logger.Error("export transactions", zap.Error(err))
+		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", "attachment; filename=transactions.csv")
+	cw := csv.NewWriter(w)
+	cw.Write([]string{"ID", "Date", "Amount", "Currency", "Method", "Status", "Customer", "Email", "Phone"})
+	for _, pi := range pis {
+		cw.Write([]string{
+			pi.ID,
+			pi.CreatedAt.Format(time.RFC3339),
+			fmt.Sprintf("%.2f", float64(pi.Amount)),
+			pi.Currency,
+			string(pi.Method),
+			mapStatus(pi.Status),
+			pi.CustomerRef,
+			pi.CustomerEmail,
+			pi.CustomerPhone,
+		})
+	}
+	cw.Flush()
+}
+
+func (h *PortalHandler) GetTransaction(w http.ResponseWriter, r *http.Request) {
+	merchantID := h.getMerchantID(r)
+	piID := r.PathValue("id")
+
+	pi, err := h.piRepo.GetByID(r.Context(), piID)
+	if err != nil {
+		respondPortalError(w, r, http.StatusNotFound, "1003", "Transaction not found")
+		return
+	}
+	if pi.MerchantID != merchantID {
+		respondPortalError(w, r, http.StatusNotFound, "1003", "Transaction not found")
+		return
+	}
+
+	attempts, err := h.attRepo.ListByPaymentIntent(r.Context(), piID)
+	if err != nil {
+		h.logger.Error("list attempts for transaction", zap.Error(err))
+		// Non-fatal: return the transaction without attempts
+	}
+
+	attemptList := make([]map[string]any, 0, len(attempts))
+	for _, a := range attempts {
+		attemptList = append(attemptList, map[string]any{
+			"id":               a.ID,
+			"psp":              a.PSP,
+			"pspReference":     a.PSPReference,
+			"pspTransactionId": a.PSPTransactionID,
+			"status":           a.Status,
+			"sequenceNo":       a.SequenceNo,
+			"createdAt":        a.CreatedAt,
+			"updatedAt":        a.UpdatedAt,
+		})
+	}
+
+	respond(w, r, http.StatusOK, map[string]any{
+		"id":             pi.ID,
+		"amount":         pi.Amount,
+		"currency":       pi.Currency,
+		"status":         mapStatus(pi.Status),
+		"method":         string(pi.Method),
+		"customerRef":    pi.CustomerRef,
+		"customerPhone":  pi.CustomerPhone,
+		"customerEmail":  pi.CustomerEmail,
+		"metadata":       pi.Metadata,
+		"expiresAt":      pi.ExpiresAt,
+		"createdAt":      pi.CreatedAt,
+		"updatedAt":      pi.UpdatedAt,
+		"attempts":       attemptList,
+	})
 }
 
 // --- payouts ---
@@ -1094,6 +1264,19 @@ func (h *PortalHandler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		"environment": apiKey.Environment,
 		"createdAt":   apiKey.CreatedAt.Format("Jan 2, 2006"),
 	})
+}
+
+func (h *PortalHandler) RevokeAPIKey(w http.ResponseWriter, r *http.Request) {
+	merchantID := h.getMerchantID(r)
+	keyID := r.PathValue("id")
+
+	if err := h.merchantRepo.DeleteAPIKey(r.Context(), keyID, merchantID); err != nil {
+		h.logger.Error("revoke api key", zap.Error(err))
+		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
+		return
+	}
+
+	respond(w, r, http.StatusOK, map[string]bool{"success": true})
 }
 
 func (h *PortalHandler) ListWebhookEndpoints(w http.ResponseWriter, r *http.Request) {

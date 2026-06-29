@@ -259,9 +259,15 @@ func (c *Connector) GetStatus(ctx context.Context, pspReference string) (connect
 	)
 
 	var queryResp struct {
-		ResponseCode        string `json:"ResponseCode"`
-		ResultCode          string `json:"ResultCode"`
-		ResultDesc          string `json:"ResultDesc"`
+		ResponseCode string `json:"ResponseCode"`
+		ResultCode   string `json:"ResultCode"`
+		ResultDesc   string `json:"ResultDesc"`
+		CallbackMetadata *struct {
+			Item []struct {
+				Name  string      `json:"Name"`
+				Value interface{} `json:"Value"`
+			} `json:"Item"`
+		} `json:"CallbackMetadata"`
 	}
 	if err := json.Unmarshal(respBody, &queryResp); err != nil {
 		c.logger.Error("mpesa query json parse failed",
@@ -278,17 +284,31 @@ func (c *Connector) GetStatus(ctx context.Context, pspReference string) (connect
 		zap.String("result_desc", queryResp.ResultDesc),
 	)
 
+	var amount int64
+	if queryResp.CallbackMetadata != nil {
+		for _, item := range queryResp.CallbackMetadata.Item {
+			if item.Name == "Amount" {
+				amount = valueToInt64(item.Value)
+			}
+		}
+	}
+
 	status := "failed"
-	if queryResp.ResultCode == "0" {
+	switch queryResp.ResultCode {
+	case "0":
 		status = "succeeded"
-	} else if queryResp.ResultCode == "1037" {
-		status = "pending"
+	case "1032":
+		status = "failed"
+	case "1037":
+		status = "failed"
+	case "2001":
+		status = "failed"
 	}
 
 	return connector.StatusResult{
-		Supported:   true,
-		Status:      status,
-		Amount: 0,
+		Supported: true,
+		Status:    status,
+		Amount:    amount,
 	}, nil
 }
 

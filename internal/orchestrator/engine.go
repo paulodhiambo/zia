@@ -581,8 +581,13 @@ func (e *Engine) applyQueryResult(ctx context.Context, pi *domain.PaymentIntent,
 		return
 	}
 
-	if err := e.piRepo.UpdateStatus(ctx, pi.ID, newPIStatus); err != nil {
+	if ok, err := e.piRepo.UpdateStatusSafe(ctx, pi.ID, pi.Status, newPIStatus); err != nil {
 		e.logger.Error("delayed query: update pi status", zap.String("pi_id", pi.ID), zap.Error(err))
+		return
+	} else if !ok {
+		e.logger.Info("delayed query: pi already updated by callback, skipping",
+			zap.String("pi_id", pi.ID),
+		)
 		return
 	}
 

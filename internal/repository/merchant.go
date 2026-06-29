@@ -17,6 +17,7 @@ type MerchantRepository interface {
 	ListAPIKeys(ctx context.Context, merchantID string) ([]domain.APIKey, error)
 	GetAPIKeyByHash(ctx context.Context, hash string) (*domain.APIKey, error)
 	GetAPIKeyByPrefix(ctx context.Context, prefix string) (*domain.APIKey, error)
+	DeleteAPIKey(ctx context.Context, id, merchantID string) error
 }
 
 type merchantRepo struct {
@@ -120,9 +121,9 @@ func (r *merchantRepo) GetAPIKeyByHash(ctx context.Context, hash string) (*domai
 	}
 	k := &domain.APIKey{}
 	err := r.db.QueryRow(ctx, `
-		SELECT id, merchant_id, key_hash, key_prefix, environment, created_at
+		SELECT id, merchant_id, name, key_hash, key_prefix, environment, created_at
 		FROM api_keys WHERE key_hash = $1`, hash).Scan(
-		&k.ID, &k.MerchantID, &k.KeyHash, &k.KeyPrefix, &k.Environment, &k.CreatedAt)
+		&k.ID, &k.MerchantID, &k.Name, &k.KeyHash, &k.KeyPrefix, &k.Environment, &k.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -132,11 +133,17 @@ func (r *merchantRepo) GetAPIKeyByHash(ctx context.Context, hash string) (*domai
 func (r *merchantRepo) GetAPIKeyByPrefix(ctx context.Context, prefix string) (*domain.APIKey, error) {
 	k := &domain.APIKey{}
 	err := r.db.QueryRow(ctx, `
-		SELECT id, merchant_id, key_hash, key_prefix, environment, created_at
+		SELECT id, merchant_id, name, key_hash, key_prefix, environment, created_at
 		FROM api_keys WHERE key_prefix = $1`, prefix).Scan(
-		&k.ID, &k.MerchantID, &k.KeyHash, &k.KeyPrefix, &k.Environment, &k.CreatedAt)
+		&k.ID, &k.MerchantID, &k.Name, &k.KeyHash, &k.KeyPrefix, &k.Environment, &k.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return k, nil
+}
+
+func (r *merchantRepo) DeleteAPIKey(ctx context.Context, id, merchantID string) error {
+	_, err := r.db.Exec(ctx,
+		`DELETE FROM api_keys WHERE id = $1 AND merchant_id = $2`, id, merchantID)
+	return err
 }
