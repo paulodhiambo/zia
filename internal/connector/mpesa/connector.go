@@ -92,7 +92,7 @@ type stkPushResponse struct {
 func (c *Connector) InitiateCollection(ctx context.Context, req connector.CollectionRequest) (connector.CollectionResult, error) {
 	c.logger.Info("mpesa InitiateCollection",
 		zap.String("pi_id", req.PaymentIntentID),
-		zap.Int64("amount_minor", req.AmountMinor),
+		zap.Int64("amount", req.Amount),
 		zap.String("currency", req.Currency),
 		zap.String("phone", req.CustomerPhone),
 	)
@@ -119,7 +119,7 @@ func (c *Connector) InitiateCollection(ctx context.Context, req connector.Collec
 		Password:          password,
 		Timestamp:         timestamp,
 		TransactionType:   "CustomerPayBillOnline",
-		Amount:            req.AmountMinor / 100, // Daraja expects whole KES, not minor units
+		Amount:            req.Amount, // Daraja expects whole KES
 		PartyA:            req.CustomerPhone,
 		PartyB:            c.config.ShortCode,
 		PhoneNumber:       req.CustomerPhone,
@@ -146,7 +146,7 @@ func (c *Connector) InitiateCollection(ctx context.Context, req connector.Collec
 	c.logger.Info("mpesa stk push request",
 		zap.String("url", c.baseURL()+"/mpesa/stkpush/v1/processrequest"),
 		zap.String("short_code", c.config.ShortCode),
-		zap.Int64("amount", req.AmountMinor),
+		zap.Int64("amount", req.Amount),
 		zap.String("phone", req.CustomerPhone),
 	)
 
@@ -288,14 +288,14 @@ func (c *Connector) GetStatus(ctx context.Context, pspReference string) (connect
 	return connector.StatusResult{
 		Supported:   true,
 		Status:      status,
-		AmountMinor: 0,
+		Amount: 0,
 	}, nil
 }
 
 func (c *Connector) Refund(ctx context.Context, req connector.RefundRequest) (connector.RefundResult, error) {
 	c.logger.Info("mpesa Refund",
 		zap.String("pi_id", req.PaymentIntentID),
-		zap.Int64("amount_minor", req.AmountMinor),
+		zap.Int64("amount", req.Amount),
 		zap.String("psp_reference", req.PSPReference),
 	)
 
@@ -308,7 +308,7 @@ func (c *Connector) Refund(ctx context.Context, req connector.RefundRequest) (co
 		"InitiatorName":      c.config.B2CInitiatorName,
 		"SecurityCredential": c.config.B2CSecurityCred,
 		"CommandID":          "BusinessPayment",
-		"Amount":             req.AmountMinor,
+		"Amount":             req.Amount,
 		"PartyA":             c.config.ShortCode,
 		"PartyB":             req.PSPReference,
 		"Remarks":            "Refund",
@@ -327,7 +327,7 @@ func (c *Connector) Refund(ctx context.Context, req connector.RefundRequest) (co
 
 	c.logger.Info("mpesa b2c request",
 		zap.String("url", c.baseURL()+"/mpesa/b2c/v3/paymentrequest"),
-		zap.Int64("amount", req.AmountMinor),
+		zap.Int64("amount", req.Amount),
 	)
 
 	resp, err := c.http.Do(httpReq)
@@ -425,14 +425,14 @@ func (c *Connector) ParseWebhook(ctx context.Context, headers map[string]string,
 	)
 
 	var pspTransactionID string
-	var amountMinor int64
+	var amount int64
 	if sc.CallbackMetadata != nil {
 		for _, item := range sc.CallbackMetadata.Item {
 			switch item.Name {
 			case "MpesaReceiptNumber":
 				pspTransactionID = valueToString(item.Value)
 			case "Amount":
-				amountMinor = valueToInt64(item.Value)
+				amount = valueToInt64(item.Value)
 			}
 		}
 	}
@@ -453,7 +453,7 @@ func (c *Connector) ParseWebhook(ctx context.Context, headers map[string]string,
 		zap.String("checkout_request_id", sc.CheckoutRequestID),
 		zap.String("receipt_number", pspTransactionID),
 		zap.String("status", status),
-		zap.Int64("amount_minor", amountMinor),
+		zap.Int64("amount", amount),
 	)
 
 	return connector.WebhookEvent{
@@ -463,7 +463,7 @@ func (c *Connector) ParseWebhook(ctx context.Context, headers map[string]string,
 		PSPTransactionID: pspTransactionID,
 		DedupKey:         dedupKey,
 		Status:           status,
-		AmountMinor:      amountMinor,
+		Amount:      amount,
 		Currency:         "KES",
 		RawPayload:       body,
 	}, nil

@@ -24,11 +24,11 @@ func NewPaymentIntent(db DBTX) PaymentIntentRepository {
 
 func (r *paymentIntentRepo) Create(ctx context.Context, pi *domain.PaymentIntent) error {
 	_, err := r.db.Exec(ctx, `
-		INSERT INTO payment_intents (id, merchant_id, amount_minor, currency, status, method,
+		INSERT INTO payment_intents (id, merchant_id, amount, currency, status, method,
 			customer_ref, customer_phone, customer_email, idempotency_key, metadata, expires_at,
 			created_at, updated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-		pi.ID, pi.MerchantID, pi.AmountMinor, pi.Currency, pi.Status, pi.Method,
+		pi.ID, pi.MerchantID, pi.Amount, pi.Currency, pi.Status, pi.Method,
 		pi.CustomerRef, pi.CustomerPhone, pi.CustomerEmail, pi.IdempotencyKey, pi.Metadata,
 		pi.ExpiresAt, pi.CreatedAt, pi.UpdatedAt)
 	return err
@@ -37,11 +37,11 @@ func (r *paymentIntentRepo) Create(ctx context.Context, pi *domain.PaymentIntent
 func (r *paymentIntentRepo) GetByID(ctx context.Context, id string) (*domain.PaymentIntent, error) {
 	pi := &domain.PaymentIntent{}
 	err := r.db.QueryRow(ctx, `
-		SELECT id, merchant_id, amount_minor, currency, status, method,
+		SELECT id, merchant_id, amount, currency, status, method,
 			customer_ref, customer_phone, customer_email, idempotency_key, metadata,
 			expires_at, created_at, updated_at
 		FROM payment_intents WHERE id = $1`, id).Scan(
-		&pi.ID, &pi.MerchantID, &pi.AmountMinor, &pi.Currency, &pi.Status, &pi.Method,
+		&pi.ID, &pi.MerchantID, &pi.Amount, &pi.Currency, &pi.Status, &pi.Method,
 		&pi.CustomerRef, &pi.CustomerPhone, &pi.CustomerEmail, &pi.IdempotencyKey,
 		&pi.Metadata, &pi.ExpiresAt, &pi.CreatedAt, &pi.UpdatedAt)
 	if err != nil {
@@ -69,7 +69,7 @@ func (r *paymentIntentRepo) UpdateStatusSafe(ctx context.Context, id string, fro
 
 func (r *paymentIntentRepo) ListByMerchant(ctx context.Context, merchantID string, limit, offset int) ([]domain.PaymentIntent, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT id, merchant_id, amount_minor, currency, status, method,
+		SELECT id, merchant_id, amount, currency, status, method,
 			customer_ref, customer_phone, customer_email, idempotency_key, metadata,
 			expires_at, created_at, updated_at
 		FROM payment_intents WHERE merchant_id = $1
@@ -82,7 +82,7 @@ func (r *paymentIntentRepo) ListByMerchant(ctx context.Context, merchantID strin
 	var pis []domain.PaymentIntent
 	for rows.Next() {
 		var pi domain.PaymentIntent
-		if err := rows.Scan(&pi.ID, &pi.MerchantID, &pi.AmountMinor, &pi.Currency, &pi.Status,
+		if err := rows.Scan(&pi.ID, &pi.MerchantID, &pi.Amount, &pi.Currency, &pi.Status,
 			&pi.Method, &pi.CustomerRef, &pi.CustomerPhone, &pi.CustomerEmail,
 			&pi.IdempotencyKey, &pi.Metadata, &pi.ExpiresAt, &pi.CreatedAt, &pi.UpdatedAt); err != nil {
 			return nil, err

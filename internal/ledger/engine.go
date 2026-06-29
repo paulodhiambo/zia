@@ -22,7 +22,7 @@ func NewEngine(repo repository.LedgerRepository) *Engine {
 type Posting struct {
 	AccountID     string
 	EntryType     string
-	AmountMinor   int64
+	Amount   int64
 }
 
 type PostingGroup struct {
@@ -44,7 +44,7 @@ func (e *Engine) PostCollection(ctx context.Context, merchantID, piID, psp strin
 			ID:            uuid.New().String(),
 			AccountID:     pspAccount,
 			EntryType:     "debit",
-			AmountMinor:   amountMinor,
+			Amount:   amountMinor,
 			Currency:      currency,
 			ReferenceType: "attempt",
 			ReferenceID:   piID,
@@ -54,7 +54,7 @@ func (e *Engine) PostCollection(ctx context.Context, merchantID, piID, psp strin
 			ID:            uuid.New().String(),
 			AccountID:     merchantAccount,
 			EntryType:     "credit",
-			AmountMinor:   amountMinor,
+			Amount:   amountMinor,
 			Currency:      currency,
 			ReferenceType: "attempt",
 			ReferenceID:   piID,
@@ -68,7 +68,7 @@ func (e *Engine) PostCollection(ctx context.Context, merchantID, piID, psp strin
 				ID:            uuid.New().String(),
 				AccountID:     merchantAccount,
 				EntryType:     "debit",
-				AmountMinor:   feeMinor,
+				Amount:   feeMinor,
 				Currency:      currency,
 				ReferenceType: "fee",
 				ReferenceID:   piID,
@@ -78,7 +78,7 @@ func (e *Engine) PostCollection(ctx context.Context, merchantID, piID, psp strin
 				ID:            uuid.New().String(),
 				AccountID:     AccountPlatformFees,
 				EntryType:     "credit",
-				AmountMinor:   feeMinor,
+				Amount:   feeMinor,
 				Currency:      currency,
 				ReferenceType: "fee",
 				ReferenceID:   piID,
@@ -101,7 +101,7 @@ func (e *Engine) PostRefund(ctx context.Context, merchantID, piID, psp string, a
 			ID:            uuid.New().String(),
 			AccountID:     merchantAccount,
 			EntryType:     "debit",
-			AmountMinor:   amountMinor,
+			Amount:   amountMinor,
 			Currency:      currency,
 			ReferenceType: "refund",
 			ReferenceID:   piID,
@@ -111,7 +111,7 @@ func (e *Engine) PostRefund(ctx context.Context, merchantID, piID, psp string, a
 			ID:            uuid.New().String(),
 			AccountID:     pspAccount,
 			EntryType:     "credit",
-			AmountMinor:   amountMinor,
+			Amount:   amountMinor,
 			Currency:      currency,
 			ReferenceType: "refund",
 			ReferenceID:   piID,
@@ -130,7 +130,7 @@ func (e *Engine) PostPayoutInit(ctx context.Context, merchantID, payoutID string
 			ID:            uuid.New().String(),
 			AccountID:     MerchantAvailable(merchantID),
 			EntryType:     "debit",
-			AmountMinor:   amountMinor,
+			Amount:   amountMinor,
 			Currency:      currency,
 			ReferenceType: "payout",
 			ReferenceID:   payoutID,
@@ -140,7 +140,7 @@ func (e *Engine) PostPayoutInit(ctx context.Context, merchantID, payoutID string
 			ID:            uuid.New().String(),
 			AccountID:     MerchantInTransit(merchantID),
 			EntryType:     "credit",
-			AmountMinor:   amountMinor,
+			Amount:   amountMinor,
 			Currency:      currency,
 			ReferenceType: "payout",
 			ReferenceID:   payoutID,
@@ -159,7 +159,7 @@ func (e *Engine) PostPayoutComplete(ctx context.Context, merchantID, payoutID st
 			ID:            uuid.New().String(),
 			AccountID:     MerchantInTransit(merchantID),
 			EntryType:     "debit",
-			AmountMinor:   amountMinor,
+			Amount:   amountMinor,
 			Currency:      currency,
 			ReferenceType: "payout",
 			ReferenceID:   payoutID,
@@ -169,7 +169,7 @@ func (e *Engine) PostPayoutComplete(ctx context.Context, merchantID, payoutID st
 			ID:            uuid.New().String(),
 			AccountID:     AccountPlatformOperating,
 			EntryType:     "credit",
-			AmountMinor:   amountMinor,
+			Amount:   amountMinor,
 			Currency:      currency,
 			ReferenceType: "payout",
 			ReferenceID:   payoutID,
@@ -188,7 +188,7 @@ func (e *Engine) PostPayoutReversal(ctx context.Context, merchantID, payoutID st
 			ID:            uuid.New().String(),
 			AccountID:     MerchantInTransit(merchantID),
 			EntryType:     "debit",
-			AmountMinor:   amountMinor,
+			Amount:   amountMinor,
 			Currency:      currency,
 			ReferenceType: "payout",
 			ReferenceID:   payoutID,
@@ -198,7 +198,7 @@ func (e *Engine) PostPayoutReversal(ctx context.Context, merchantID, payoutID st
 			ID:            uuid.New().String(),
 			AccountID:     MerchantAvailable(merchantID),
 			EntryType:     "credit",
-			AmountMinor:   amountMinor,
+			Amount:   amountMinor,
 			Currency:      currency,
 			ReferenceType: "payout",
 			ReferenceID:   payoutID,
@@ -225,9 +225,9 @@ func validateBalanced(entries []domain.LedgerEntry) error {
 	for _, e := range entries {
 		key := e.Currency
 		if e.EntryType == "debit" {
-			balances[key] += e.AmountMinor
+			balances[key] += e.Amount
 		} else {
-			balances[key] -= e.AmountMinor
+			balances[key] -= e.Amount
 		}
 	}
 	for currency, net := range balances {

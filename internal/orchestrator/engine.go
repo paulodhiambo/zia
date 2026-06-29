@@ -26,7 +26,7 @@ const queryDelay = 40 * time.Second
 
 type FeeConfig struct {
 	Percent       int   // percentage (e.g. 5 = 5%)
-	MinAmount     int64 // minimum fee in minor units (e.g. 100 = 1.00)
+	MinAmount     int64 // minimum fee in shillings (e.g. 1 = 1 KES)
 }
 
 type Engine struct {
@@ -70,7 +70,7 @@ func New(
 
 type CreatePIRequest struct {
 	MerchantID     string              `json:"merchant_id"`
-	AmountMinor    int64               `json:"amount_minor"`
+	Amount    int64               `json:"amountMinor"`
 	Currency       string              `json:"currency"`
 	Method         domain.PaymentMethod `json:"method"`
 	CustomerRef    string              `json:"customer_ref,omitempty"`
@@ -107,14 +107,14 @@ func (e *Engine) CreatePaymentIntent(ctx context.Context, req CreatePIRequest) (
 
 	e.logger.Info("evaluating risk",
 		zap.String("merchant_id", req.MerchantID),
-		zap.Int64("amount_minor", req.AmountMinor),
+		zap.Int64("amount", req.Amount),
 		zap.String("currency", req.Currency),
 		zap.String("method", string(req.Method)),
 	)
 
 	if err := e.risk.Evaluate(ctx, risk.Request{
 		MerchantID:    req.MerchantID,
-		AmountMinor:   req.AmountMinor,
+		Amount:   req.Amount,
 		Currency:      req.Currency,
 		Method:        string(req.Method),
 		CustomerPhone: req.CustomerPhone,
@@ -122,7 +122,7 @@ func (e *Engine) CreatePaymentIntent(ctx context.Context, req CreatePIRequest) (
 	}); err != nil {
 		e.logger.Warn("risk check rejected",
 			zap.String("merchant_id", req.MerchantID),
-			zap.Int64("amount_minor", req.AmountMinor),
+			zap.Int64("amount", req.Amount),
 			zap.Error(err),
 		)
 		return nil, fmt.Errorf("risk check: %w", err)
@@ -138,7 +138,7 @@ func (e *Engine) CreatePaymentIntent(ctx context.Context, req CreatePIRequest) (
 		MerchantID:  req.MerchantID,
 		Currency:    req.Currency,
 		Method:      string(req.Method),
-		AmountMinor: req.AmountMinor,
+		Amount: req.Amount,
 	})
 	if err != nil {
 		e.logger.Error("routing failed",
@@ -192,7 +192,7 @@ func (e *Engine) CreatePaymentIntent(ctx context.Context, req CreatePIRequest) (
 	pi := &domain.PaymentIntent{
 		ID:             uuid.New().String(),
 		MerchantID:     req.MerchantID,
-		AmountMinor:    req.AmountMinor,
+		Amount:    req.Amount,
 		Currency:       req.Currency,
 		Status:         domain.PICreated,
 		Method:         req.Method,
@@ -218,7 +218,7 @@ func (e *Engine) CreatePaymentIntent(ctx context.Context, req CreatePIRequest) (
 	e.logger.Info("payment intent saved",
 		zap.String("pi_id", pi.ID),
 		zap.String("merchant_id", pi.MerchantID),
-		zap.Int64("amount_minor", pi.AmountMinor),
+		zap.Int64("amount", pi.Amount),
 		zap.String("currency", pi.Currency),
 		zap.String("method", string(pi.Method)),
 		zap.String("status", string(pi.Status)),
@@ -232,7 +232,7 @@ func (e *Engine) CreatePaymentIntent(ctx context.Context, req CreatePIRequest) (
 
 	colReq := connector.CollectionRequest{
 		PaymentIntentID: pi.ID,
-		AmountMinor:     req.AmountMinor,
+		Amount:     req.Amount,
 		Currency:        req.Currency,
 		Method:          string(req.Method),
 		CustomerPhone:   req.CustomerPhone,
@@ -244,7 +244,7 @@ func (e *Engine) CreatePaymentIntent(ctx context.Context, req CreatePIRequest) (
 	e.logger.Info("calling connector InitiateCollection",
 		zap.String("psp", route.Primary),
 		zap.String("pi_id", pi.ID),
-		zap.Int64("amount_minor", colReq.AmountMinor),
+		zap.Int64("amount", colReq.Amount),
 		zap.String("currency", colReq.Currency),
 		zap.String("customer_phone", colReq.CustomerPhone),
 	)
@@ -449,15 +449,15 @@ func (e *Engine) HandleWebhookEvent(ctx context.Context, evt connector.WebhookEv
 	}
 
 	if newPIStatus == domain.PISucceeded {
-		fee := e.computeFee(pi.AmountMinor)
+		fee := e.computeFee(pi.Amount)
 		e.logger.Info("posting ledger for succeeded payment",
 			zap.String("pi_id", pi.ID),
 			zap.String("merchant_id", pi.MerchantID),
-			zap.Int64("amount_minor", pi.AmountMinor),
+			zap.Int64("amount", pi.Amount),
 			zap.String("currency", pi.Currency),
 			zap.Int64("platform_fee", fee),
 		)
-		if err := e.ledger.PostCollection(ctx, pi.MerchantID, pi.ID, attempt.PSP, pi.AmountMinor, pi.Currency, fee); err != nil {
+		if err := e.ledger.PostCollection(ctx, pi.MerchantID, pi.ID, attempt.PSP, pi.Amount, pi.Currency, fee); err != nil {
 			e.logger.Error("ledger posting failed for succeeded payment",
 				zap.String("pi_id", pi.ID),
 				zap.Error(err),
@@ -474,7 +474,7 @@ func (e *Engine) HandleWebhookEvent(ctx context.Context, evt connector.WebhookEv
 			EventType:    fmt.Sprintf("payment.%s", newPIStatus),
 			PIID:         pi.ID,
 			MerchantID:   pi.MerchantID,
-			AmountMinor:  pi.AmountMinor,
+			Amount:  pi.Amount,
 			Currency:     pi.Currency,
 			PSP:          attempt.PSP,
 			PSPReference: attempt.PSPReference,
@@ -496,8 +496,8 @@ func (e *Engine) HandleWebhookEvent(ctx context.Context, evt connector.WebhookEv
 	return nil
 }
 
-func (e *Engine) computeFee(amountMinor int64) int64 {
-	fee := amountMinor * int64(e.feeCfg.Percent) / 100
+func (e *Engine) computeFee(amount int64) int64 {
+	fee := amount * int64(e.feeCfg.Percent) / 100
 	if fee < e.feeCfg.MinAmount {
 		return e.feeCfg.MinAmount
 	}
@@ -593,8 +593,8 @@ func (e *Engine) applyQueryResult(ctx context.Context, pi *domain.PaymentIntent,
 	)
 
 	if newPIStatus == domain.PISucceeded {
-		fee := e.computeFee(pi.AmountMinor)
-		if err := e.ledger.PostCollection(ctx, pi.MerchantID, pi.ID, attempt.PSP, pi.AmountMinor, pi.Currency, fee); err != nil {
+		fee := e.computeFee(pi.Amount)
+		if err := e.ledger.PostCollection(ctx, pi.MerchantID, pi.ID, attempt.PSP, pi.Amount, pi.Currency, fee); err != nil {
 			e.logger.Error("delayed query: ledger post failed", zap.String("pi_id", pi.ID), zap.Error(err))
 			return
 		}
@@ -605,7 +605,7 @@ func (e *Engine) applyQueryResult(ctx context.Context, pi *domain.PaymentIntent,
 			EventType:    fmt.Sprintf("payment.%s", newPIStatus),
 			PIID:         pi.ID,
 			MerchantID:   pi.MerchantID,
-			AmountMinor:  pi.AmountMinor,
+			Amount:  pi.Amount,
 			Currency:     pi.Currency,
 			PSP:          attempt.PSP,
 			PSPReference: attempt.PSPReference,

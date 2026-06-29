@@ -9,7 +9,7 @@ import (
 
 type Request struct {
 	MerchantID    string
-	AmountMinor   int64
+	Amount   int64
 	Currency      string
 	Method        string
 	CustomerPhone string
@@ -34,12 +34,12 @@ func NewEngine() *Engine {
 }
 
 func (e *Engine) Evaluate(_ context.Context, req Request) error {
-	if req.AmountMinor <= 0 {
+	if req.Amount <= 0 {
 		return fmt.Errorf("amount must be positive")
 	}
 
-	if req.AmountMinor > e.maxAmount {
-		return fmt.Errorf("amount exceeds maximum: %d > %d", req.AmountMinor, e.maxAmount)
+	if req.Amount > e.maxAmount {
+		return fmt.Errorf("amount exceeds maximum: %d > %d", req.Amount, e.maxAmount)
 	}
 
 	if req.CustomerPhone != "" {

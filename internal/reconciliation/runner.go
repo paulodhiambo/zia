@@ -102,12 +102,12 @@ func (r *Runner) reconcilePSP(ctx context.Context, name string, conn connector.C
 			continue
 		}
 
-		if statusResult.AmountMinor > 0 && statusResult.AmountMinor != att.AmountMinor {
+		if statusResult.Amount > 0 && statusResult.Amount != att.Amount {
 			r.logger.Warn("reconciliation MISMATCH: amount differs",
 				zap.String("psp", name),
 				zap.String("psp_reference", att.PSPReference),
-				zap.Int64("local_amount", att.AmountMinor),
-				zap.Int64("psp_amount", statusResult.AmountMinor))
+				zap.Int64("local_amount", att.Amount),
+				zap.Int64("psp_amount", statusResult.Amount))
 			unmatched++
 			continue
 		}

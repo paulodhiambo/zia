@@ -25,7 +25,7 @@ const (
 type PaymentIntent struct {
 	ID             string              `db:"id" json:"id"`
 	MerchantID     string              `db:"merchant_id" json:"merchantId"`
-	AmountMinor    int64               `db:"amount_minor" json:"amountMinor"`
+	Amount    int64               `db:"amount" json:"amountMinor"`
 	Currency       string              `db:"currency" json:"currency"`
 	Status         PaymentIntentStatus `db:"status" json:"status"`
 	Method         PaymentMethod       `db:"method" json:"method"`

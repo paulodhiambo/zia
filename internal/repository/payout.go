@@ -23,10 +23,10 @@ func NewPayout(db DBTX) PayoutRepository {
 
 func (r *payoutRepo) Create(ctx context.Context, p *domain.Payout) error {
 	_, err := r.db.Exec(ctx, `
-		INSERT INTO payouts (id, merchant_id, amount_minor, currency, rail, status, psp_reference,
+		INSERT INTO payouts (id, merchant_id, amount, currency, rail, status, psp_reference,
 			created_at, updated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		p.ID, p.MerchantID, p.AmountMinor, p.Currency, p.Rail, p.Status,
+		p.ID, p.MerchantID, p.Amount, p.Currency, p.Rail, p.Status,
 		p.PSPReference, p.CreatedAt, p.UpdatedAt)
 	return err
 }
@@ -34,10 +34,10 @@ func (r *payoutRepo) Create(ctx context.Context, p *domain.Payout) error {
 func (r *payoutRepo) GetByID(ctx context.Context, id string) (*domain.Payout, error) {
 	p := &domain.Payout{}
 	err := r.db.QueryRow(ctx, `
-		SELECT id, merchant_id, amount_minor, currency, rail, status,
+		SELECT id, merchant_id, amount, currency, rail, status,
 			psp_reference, created_at, updated_at
 		FROM payouts WHERE id = $1`, id).Scan(
-		&p.ID, &p.MerchantID, &p.AmountMinor, &p.Currency, &p.Rail, &p.Status,
+		&p.ID, &p.MerchantID, &p.Amount, &p.Currency, &p.Rail, &p.Status,
 		&p.PSPReference, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -47,7 +47,7 @@ func (r *payoutRepo) GetByID(ctx context.Context, id string) (*domain.Payout, er
 
 func (r *payoutRepo) ListByMerchant(ctx context.Context, merchantID string, limit, offset int) ([]domain.Payout, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT id, merchant_id, amount_minor, currency, rail, status,
+		SELECT id, merchant_id, amount, currency, rail, status,
 			psp_reference, created_at, updated_at
 		FROM payouts WHERE merchant_id = $1
 		ORDER BY created_at DESC LIMIT $2 OFFSET $3`, merchantID, limit, offset)
@@ -59,7 +59,7 @@ func (r *payoutRepo) ListByMerchant(ctx context.Context, merchantID string, limi
 	var payouts []domain.Payout
 	for rows.Next() {
 		var p domain.Payout
-		if err := rows.Scan(&p.ID, &p.MerchantID, &p.AmountMinor, &p.Currency, &p.Rail,
+		if err := rows.Scan(&p.ID, &p.MerchantID, &p.Amount, &p.Currency, &p.Rail,
 			&p.Status, &p.PSPReference, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}

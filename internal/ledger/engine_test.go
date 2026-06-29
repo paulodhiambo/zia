@@ -29,9 +29,9 @@ func (m *mockLedgerRepo) Balance(_ context.Context, accountID string) (int64, er
 	for _, e := range m.entries {
 		if e.AccountID == accountID {
 			if e.EntryType == "credit" {
-				balance += e.AmountMinor
+				balance += e.Amount
 			} else {
-				balance -= e.AmountMinor
+				balance -= e.Amount
 			}
 		}
 	}
@@ -69,9 +69,9 @@ func TestPostCollection(t *testing.T) {
 	var totalDebit, totalCredit int64
 	for _, e := range repo.entries {
 		if e.EntryType == "debit" {
-			totalDebit += e.AmountMinor
+			totalDebit += e.Amount
 		} else {
-			totalCredit += e.AmountMinor
+			totalCredit += e.Amount
 		}
 	}
 	if totalDebit != totalCredit {
@@ -95,9 +95,9 @@ func TestPostRefund(t *testing.T) {
 	var totalDebit, totalCredit int64
 	for _, e := range repo.entries {
 		if e.EntryType == "debit" {
-			totalDebit += e.AmountMinor
+			totalDebit += e.Amount
 		} else {
-			totalCredit += e.AmountMinor
+			totalCredit += e.Amount
 		}
 	}
 	if totalDebit != totalCredit {
@@ -114,26 +114,26 @@ func TestValidateBalanced(t *testing.T) {
 		{
 			name: "balanced pair",
 			entries: []domain.LedgerEntry{
-				{AccountID: "a", EntryType: "debit", AmountMinor: 1000, Currency: "KES"},
-				{AccountID: "b", EntryType: "credit", AmountMinor: 1000, Currency: "KES"},
+				{AccountID: "a", EntryType: "debit", Amount: 1000, Currency: "KES"},
+				{AccountID: "b", EntryType: "credit", Amount: 1000, Currency: "KES"},
 			},
 			wantErr: false,
 		},
 		{
 			name: "unbalanced",
 			entries: []domain.LedgerEntry{
-				{AccountID: "a", EntryType: "debit", AmountMinor: 1000, Currency: "KES"},
-				{AccountID: "b", EntryType: "credit", AmountMinor: 500, Currency: "KES"},
+				{AccountID: "a", EntryType: "debit", Amount: 1000, Currency: "KES"},
+				{AccountID: "b", EntryType: "credit", Amount: 500, Currency: "KES"},
 			},
 			wantErr: true,
 		},
 		{
 			name: "zero-sum across currencies",
 			entries: []domain.LedgerEntry{
-				{AccountID: "a", EntryType: "debit", AmountMinor: 1000, Currency: "KES"},
-				{AccountID: "b", EntryType: "credit", AmountMinor: 1000, Currency: "KES"},
-				{AccountID: "c", EntryType: "debit", AmountMinor: 500, Currency: "USD"},
-				{AccountID: "d", EntryType: "credit", AmountMinor: 500, Currency: "USD"},
+				{AccountID: "a", EntryType: "debit", Amount: 1000, Currency: "KES"},
+				{AccountID: "b", EntryType: "credit", Amount: 1000, Currency: "KES"},
+				{AccountID: "c", EntryType: "debit", Amount: 500, Currency: "USD"},
+				{AccountID: "d", EntryType: "credit", Amount: 500, Currency: "USD"},
 			},
 			wantErr: false,
 		},

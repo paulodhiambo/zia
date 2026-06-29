@@ -37,7 +37,7 @@ func NewCheckoutHandler(
 }
 
 type createCheckoutRequest struct {
-	AmountMinor   int64  `json:"amountMinor"`
+	Amount   int64  `json:"amount"`
 	Currency      string `json:"currency"`
 	Method        string `json:"method"`
 	CustomerEmail string `json:"customerEmail"`
@@ -64,7 +64,7 @@ func (h *CheckoutHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.AmountMinor <= 0 {
+	if req.Amount <= 0 {
 		respondValidationError(w, r, []FieldError{
 			{Field: "amountMinor", Message: "must be positive"},
 		})
@@ -79,7 +79,7 @@ func (h *CheckoutHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Info("checkout create request",
 		zap.String("merchant_id", merchantID),
-		zap.Int64("amount_minor", req.AmountMinor),
+		zap.Int64("amount", req.Amount),
 		zap.String("currency", req.Currency),
 		zap.String("method", req.Method),
 		zap.String("customer_phone", req.CustomerPhone),
@@ -91,7 +91,7 @@ func (h *CheckoutHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.Error("create payment intent for checkout",
 			zap.String("merchant_id", merchantID),
-			zap.Int64("amount_minor", req.AmountMinor),
+			zap.Int64("amount", req.Amount),
 			zap.String("currency", req.Currency),
 			zap.Error(err),
 		)
@@ -109,7 +109,7 @@ func (h *CheckoutHandler) Create(w http.ResponseWriter, r *http.Request) {
 	token := "cs_" + uuid.New().String()
 
 	uiCfg, _ := json.Marshal(map[string]any{
-		"amount":   req.AmountMinor,
+		"amount":   req.Amount,
 		"currency": req.Currency,
 	})
 
@@ -178,7 +178,7 @@ func (h *CheckoutHandler) Status(w http.ResponseWriter, r *http.Request) {
 		"token":          token,
 		"paymentIntentId": pi.ID,
 		"status":         pi.Status,
-		"amountMinor":    pi.AmountMinor,
+		"amountMinor":    pi.Amount,
 		"currency":       pi.Currency,
 	})
 }
@@ -190,7 +190,7 @@ func buildPIRequest(merchantID, idempotencyKey string, req createCheckoutRequest
 	}
 	return orchestrator.CreatePIRequest{
 		MerchantID:     merchantID,
-		AmountMinor:    req.AmountMinor,
+		Amount:    req.Amount,
 		Currency:       req.Currency,
 		Method:         domain.PaymentMethod(method),
 		CustomerPhone:  req.CustomerPhone,

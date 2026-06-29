@@ -13,7 +13,7 @@ type RouteRequest struct {
 	Currency    string
 	Country     string
 	Method      string
-	AmountMinor int64
+	Amount int64
 }
 
 type RouteDecision struct {

@@ -108,7 +108,7 @@ func (r *Runner) settleMerchant(ctx context.Context, m domain.Merchant, policy S
 
 	colReq := connector.PayoutRequest{
 		MerchantID:     m.ID,
-		AmountMinor:    payoutAmount,
+		Amount:    payoutAmount,
 		Currency:       m.DefaultCurrency,
 		TargetCurrency: m.DefaultCurrency,
 		BankAccountRef: m.ID,
@@ -127,7 +127,7 @@ func (r *Runner) settleMerchant(ctx context.Context, m domain.Merchant, policy S
 	payout := &domain.Payout{
 		ID:          payoutID,
 		MerchantID:  m.ID,
-		AmountMinor: payoutAmount,
+		Amount: payoutAmount,
 		Currency:    m.DefaultCurrency,
 		Rail:        rail,
 		Status:      domain.PayoutPending,

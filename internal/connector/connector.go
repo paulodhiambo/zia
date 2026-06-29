@@ -23,7 +23,7 @@ type Capabilities struct {
 
 type CollectionRequest struct {
 	PaymentIntentID string
-	AmountMinor     int64
+	Amount     int64
 	Currency        string
 	Method          string
 	CustomerPhone   string
@@ -48,7 +48,7 @@ type NextAction struct {
 type StatusResult struct {
 	Supported bool
 	Status    string
-	AmountMinor int64
+	Amount int64
 	Currency    string
 }
 
@@ -56,7 +56,7 @@ type RefundRequest struct {
 	PaymentIntentID string
 	AttemptID       string
 	PSPReference    string
-	AmountMinor     int64
+	Amount     int64
 	Currency        string
 	Reason          string
 }
@@ -68,7 +68,7 @@ type RefundResult struct {
 
 type PayoutRequest struct {
 	MerchantID      string
-	AmountMinor     int64
+	Amount     int64
 	Currency        string
 	TargetCurrency  string
 	BankAccountRef  string
@@ -87,7 +87,7 @@ type WebhookEvent struct {
 	PSPTransactionID string
 	DedupKey         string
 	Status           string
-	AmountMinor      int64
+	Amount      int64
 	Currency         string
 	RawPayload       []byte
 }

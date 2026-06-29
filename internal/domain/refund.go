@@ -14,7 +14,7 @@ type Refund struct {
 	ID              string       `db:"id" json:"id"`
 	PaymentIntentID string       `db:"payment_intent_id" json:"paymentIntentId"`
 	AttemptID       *string      `db:"attempt_id" json:"attemptId"`
-	AmountMinor     int64        `db:"amount_minor" json:"amountMinor"`
+	Amount     int64        `db:"amount" json:"amountMinor"`
 	Currency        string       `db:"currency" json:"currency"`
 	Status          RefundStatus `db:"status" json:"status"`
 	Reason          *string      `db:"reason" json:"reason"`

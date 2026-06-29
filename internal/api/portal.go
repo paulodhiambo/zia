@@ -546,7 +546,7 @@ func (h *PortalHandler) DashboardOverview(w http.ResponseWriter, r *http.Request
 	var successCount int
 	for _, pi := range pis {
 		if pi.CreatedAt.After(todayStart) {
-			todayVolume += pi.AmountMinor
+			todayVolume += pi.Amount
 		}
 		if pi.Status == domain.PISucceeded {
 			successCount++
@@ -558,16 +558,16 @@ func (h *PortalHandler) DashboardOverview(w http.ResponseWriter, r *http.Request
 	var pendingPayouts int64
 	for _, p := range payoutsList {
 		if p.Status == domain.PayoutPending {
-			pendingPayouts += p.AmountMinor
+			pendingPayouts += p.Amount
 		}
 	}
 
 	respond(w, r, http.StatusOK, map[string]any{
 		"merchantCode":       merchant.Code,
-		"treasuryBalance":    float64(available) / 100.0,
-		"todayVolume":        float64(todayVolume) / 100.0,
+		"treasuryBalance":    float64(available),
+		"todayVolume":        float64(todayVolume),
 		"successfulPayments": successCount,
-		"pendingPayouts":     float64(pendingPayouts) / 100.0,
+		"pendingPayouts":     float64(pendingPayouts),
 		"checklist": []map[string]any{
 			{"task": "Verify business entity", "status": "Done", "completed": true},
 			{"task": "Connect payment method", "status": "Done", "completed": true},
@@ -602,7 +602,7 @@ func (h *PortalHandler) ListTransactions(w http.ResponseWriter, r *http.Request)
 			"date":         pi.CreatedAt.Format("Jan 2 · 15:04"),
 			"counterparty": pi.CustomerRef,
 			"method":       string(pi.Method),
-			"amount":       fmt.Sprintf("%.2f", float64(pi.AmountMinor)/100.0),
+			"amount":       fmt.Sprintf("%.2f", float64(pi.Amount)),
 			"currency":     pi.Currency,
 			"status":       mapStatus(pi.Status),
 		})
@@ -642,7 +642,7 @@ func (h *PortalHandler) ListPayouts(w http.ResponseWriter, r *http.Request) {
 			"source":      "Operating · " + p.Currency,
 			"destination": "Bank · " + p.Rail,
 			"bank":        p.Rail,
-			"amount":      fmt.Sprintf("%.2f", float64(p.AmountMinor)/100.0),
+			"amount":      fmt.Sprintf("%.2f", float64(p.Amount)),
 			"currency":    p.Currency,
 			"status":      status,
 		})
@@ -687,7 +687,7 @@ func (h *PortalHandler) CreatePayout(w http.ResponseWriter, r *http.Request) {
 	payout := &domain.Payout{
 		ID:          uuid.New().String(),
 		MerchantID:  merchantID,
-		AmountMinor: int64(data.Amount * 100),
+		Amount: int64(data.Amount),
 		Currency:    data.Currency,
 		Rail:        data.Bank,
 		Status:      domain.PayoutPending,
@@ -827,7 +827,7 @@ func (h *PortalHandler) GetCustomerCharges(w http.ResponseWriter, r *http.Reques
 		charges = append(charges, map[string]any{
 			"id":       pi.ID,
 			"date":     pi.CreatedAt.Format("Jan 2 · 15:04"),
-			"amount":   fmt.Sprintf("%.2f", float64(pi.AmountMinor)/100.0),
+			"amount":   fmt.Sprintf("%.2f", float64(pi.Amount)),
 			"currency": pi.Currency,
 			"method":   string(pi.Method),
 			"status":   mapStatus(pi.Status),

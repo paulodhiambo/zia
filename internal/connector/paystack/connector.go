@@ -54,7 +54,7 @@ func (c *Connector) baseURL() string {
 func (c *Connector) InitiateCollection(ctx context.Context, req connector.CollectionRequest) (connector.CollectionResult, error) {
 	body := map[string]any{
 		"email":        req.CustomerEmail,
-		"amount":       req.AmountMinor,
+		"amount":       toPaystackAmount(req.Amount, req.Currency),
 		"reference":    req.PaymentIntentID,
 		"callback_url": req.CallbackURL,
 		"currency":     req.Currency,
@@ -142,10 +142,15 @@ func (c *Connector) GetStatus(ctx context.Context, pspReference string) (connect
 		status = "failed"
 	}
 
+	a := verifyResp.Data.Amount
+	if centsCurrency(verifyResp.Data.Currency) {
+		a = a / 100
+	}
+
 	return connector.StatusResult{
 		Supported:  true,
 		Status:     status,
-		AmountMinor: verifyResp.Data.Amount,
+		Amount: a,
 		Currency:   verifyResp.Data.Currency,
 	}, nil
 }
@@ -153,7 +158,7 @@ func (c *Connector) GetStatus(ctx context.Context, pspReference string) (connect
 func (c *Connector) Refund(ctx context.Context, req connector.RefundRequest) (connector.RefundResult, error) {
 	body := map[string]any{
 		"transaction": req.PSPReference,
-		"amount":      req.AmountMinor,
+		"amount":      toPaystackAmount(req.Amount, req.Currency),
 	}
 	data, _ := json.Marshal(body)
 
@@ -200,7 +205,7 @@ func (c *Connector) InitiatePayout(ctx context.Context, req connector.PayoutRequ
 	body := map[string]any{
 		"source":   "balance",
 		"reason":   "merchant payout",
-		"amount":   req.AmountMinor,
+		"amount":   toPaystackAmount(req.Amount, req.Currency),
 		"recipient": req.BankAccountRef,
 		"currency": req.Currency,
 	}
@@ -280,7 +285,7 @@ func (c *Connector) ParseWebhook(ctx context.Context, headers map[string]string,
 			PSPReference: charge.Reference,
 			DedupKey:     fmt.Sprintf("charge.success:%d", charge.ID),
 			Status:       "succeeded",
-			AmountMinor:  charge.Amount,
+			Amount:  fromPaystackAmount(charge.Amount, charge.Currency),
 			Currency:     charge.Currency,
 			RawPayload:   body,
 		}, nil
@@ -304,7 +309,7 @@ func (c *Connector) ParseWebhook(ctx context.Context, headers map[string]string,
 			PSPReference: transfer.TransferCode,
 			DedupKey:     fmt.Sprintf("transfer.success:%d", transfer.ID),
 			Status:       "succeeded",
-			AmountMinor:  transfer.Amount,
+			Amount:  fromPaystackAmount(transfer.Amount, transfer.Currency),
 			Currency:     transfer.Currency,
 			RawPayload:   body,
 		}, nil
@@ -327,7 +332,7 @@ func (c *Connector) ParseWebhook(ctx context.Context, headers map[string]string,
 			PSPReference: transfer.TransferCode,
 			DedupKey:     fmt.Sprintf("transfer.failed:%d", transfer.ID),
 			Status:       "failed",
-			AmountMinor:  transfer.Amount,
+			Amount:  fromPaystackAmount(transfer.Amount, transfer.Currency),
 			Currency:     transfer.Currency,
 			RawPayload:   body,
 		}, nil
@@ -350,7 +355,7 @@ func (c *Connector) ParseWebhook(ctx context.Context, headers map[string]string,
 			PSPReference: refund.TransactionRef,
 			DedupKey:     fmt.Sprintf("refund.success:%d", refund.ID),
 			Status:       "succeeded",
-			AmountMinor:  refund.Amount,
+			Amount:  fromPaystackAmount(refund.Amount, refund.Currency),
 			Currency:     refund.Currency,
 			RawPayload:   body,
 		}, nil
@@ -368,4 +373,27 @@ func (c *Connector) ParseWebhook(ctx context.Context, headers map[string]string,
 func (c *Connector) auth(req *http.Request) {
 	req.Header.Set("Authorization", "Bearer "+c.config.SecretKey)
 	req.Header.Set("Content-Type", "application/json")
+}
+
+func centsCurrency(cur string) bool {
+	switch cur {
+	case "KES", "UGX", "TZS", "RWF":
+		return false
+	default:
+		return true
+	}
+}
+
+func toPaystackAmount(amount int64, currency string) int64 {
+	if centsCurrency(currency) {
+		return amount * 100
+	}
+	return amount
+}
+
+func fromPaystackAmount(amount int64, currency string) int64 {
+	if centsCurrency(currency) {
+		return amount / 100
+	}
+	return amount
 }

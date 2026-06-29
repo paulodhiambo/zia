@@ -44,7 +44,7 @@ type NotificationEvent struct {
 	EventType    string `json:"event_type"`
 	PIID         string `json:"pi_id"`
 	MerchantID   string `json:"merchant_id"`
-	AmountMinor  int64  `json:"amount_minor"`
+	Amount  int64  `json:"amountMinor"`
 	Currency     string `json:"currency"`
 	PSP          string `json:"psp"`
 	PSPReference string `json:"psp_reference"`
@@ -151,7 +151,7 @@ func (d *Dispatcher) processNotification(ctx context.Context, evt NotificationEv
 	payload, _ := json.Marshal(map[string]any{
 		"event":      evt.EventType,
 		"pi_id":      evt.PIID,
-		"amount":     evt.AmountMinor,
+		"amount":     evt.Amount,
 		"currency":   evt.Currency,
 		"psp":        evt.PSPReference,
 		"status":     evt.Status,
@@ -167,17 +167,17 @@ func (d *Dispatcher) notificationFromEvent(evt NotificationEvent) *domain.Notifi
 	case evt.Status == "succeeded":
 		tone = "success"
 		title = "Payment Successful"
-		body = fmt.Sprintf("%s payment of %d %s was successful", evt.PSP, evt.AmountMinor, evt.Currency)
+		body = fmt.Sprintf("%s payment of %d %s was successful", evt.PSP, evt.Amount, evt.Currency)
 		category = "payment"
 	case evt.Status == "failed":
 		tone = "error"
 		title = "Payment Failed"
-		body = fmt.Sprintf("%s payment of %d %s failed", evt.PSP, evt.AmountMinor, evt.Currency)
+		body = fmt.Sprintf("%s payment of %d %s failed", evt.PSP, evt.Amount, evt.Currency)
 		category = "payment"
 	default:
 		tone = "info"
 		title = fmt.Sprintf("Payment %s", evt.Status)
-		body = fmt.Sprintf("%s payment of %d %s is %s", evt.PSP, evt.AmountMinor, evt.Currency, evt.Status)
+		body = fmt.Sprintf("%s payment of %d %s is %s", evt.PSP, evt.Amount, evt.Currency, evt.Status)
 		category = "payment"
 	}
 

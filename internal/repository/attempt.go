@@ -13,7 +13,7 @@ type AttemptRow struct {
 	PSP             string               `db:"psp"`
 	PSPReference    string               `db:"psp_reference"`
 	Status          domain.AttemptStatus `db:"status"`
-	AmountMinor     int64                `db:"amount_minor"`
+	Amount     int64                `db:"amount"`
 	Currency        string               `db:"currency"`
 	CreatedAt       time.Time            `db:"created_at"`
 }
@@ -132,7 +132,7 @@ func (r *attemptRepo) ListByPaymentIntent(ctx context.Context, paymentIntentID s
 func (r *attemptRepo) ListByDateRange(ctx context.Context, from, to time.Time) ([]AttemptRow, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT a.id, a.payment_intent_id, a.psp, a.psp_reference, a.status,
-			pi.amount_minor, pi.currency, a.created_at
+			pi.amount, pi.currency, a.created_at
 		FROM attempts a
 		JOIN payment_intents pi ON pi.id = a.payment_intent_id
 		WHERE a.created_at >= $1 AND a.created_at < $2
@@ -146,7 +146,7 @@ func (r *attemptRepo) ListByDateRange(ctx context.Context, from, to time.Time) (
 	for rows.Next() {
 		var row AttemptRow
 		if err := rows.Scan(&row.ID, &row.PaymentIntentID, &row.PSP, &row.PSPReference,
-			&row.Status, &row.AmountMinor, &row.Currency, &row.CreatedAt); err != nil {
+			&row.Status, &row.Amount, &row.Currency, &row.CreatedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, row)

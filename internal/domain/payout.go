@@ -13,7 +13,7 @@ const (
 type Payout struct {
 	ID           string       `db:"id" json:"id"`
 	MerchantID   string       `db:"merchant_id" json:"merchantId"`
-	AmountMinor  int64        `db:"amount_minor" json:"amountMinor"`
+	Amount  int64        `db:"amount" json:"amountMinor"`
 	Currency     string       `db:"currency" json:"currency"`
 	Rail         string       `db:"rail" json:"rail"`
 	Status       PayoutStatus `db:"status" json:"status"`

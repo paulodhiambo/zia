@@ -23,7 +23,7 @@ func NewPaymentIntentHandler(svc *service.PaymentIntentService, logger *zap.Logg
 }
 
 type createPIRequest struct {
-	AmountMinor   int64  `json:"amountMinor"`
+	Amount   int64  `json:"amount"`
 	Currency      string `json:"currency"`
 	Method        string `json:"method"`
 	CustomerPhone string `json:"customerPhone,omitempty"`
@@ -34,7 +34,7 @@ type createPIRequest struct {
 type piResponse struct {
 	ID            string `json:"id"`
 	MerchantID    string `json:"merchantId"`
-	AmountMinor   int64  `json:"amountMinor"`
+	Amount   int64  `json:"amount"`
 	Currency      string `json:"currency"`
 	Status        string `json:"status"`
 	Method        string `json:"method"`
@@ -68,7 +68,7 @@ func (h *PaymentIntentHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.AmountMinor <= 0 {
+	if req.Amount <= 0 {
 		respondValidationError(w, r, []FieldError{
 			{Field: "primaryData.amountMinor", Message: "must be greater than 0"},
 		})
@@ -95,7 +95,7 @@ func (h *PaymentIntentHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	orcReq := orchestrator.CreatePIRequest{
 		MerchantID:     merchantID,
-		AmountMinor:    req.AmountMinor,
+		Amount:    req.Amount,
 		Currency:       req.Currency,
 		Method:         domain.PaymentMethod(req.Method),
 		CustomerRef:    req.CustomerRef,
@@ -106,7 +106,7 @@ func (h *PaymentIntentHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Info("payment intent create request",
 		zap.String("merchant_id", merchantID),
-		zap.Int64("amount_minor", req.AmountMinor),
+		zap.Int64("amount", req.Amount),
 		zap.String("currency", req.Currency),
 		zap.String("method", req.Method),
 		zap.String("customer_phone", req.CustomerPhone),
@@ -117,7 +117,7 @@ func (h *PaymentIntentHandler) Create(w http.ResponseWriter, r *http.Request) {
 	result, err := h.svc.Create(r.Context(), orcReq)
 	if err != nil {
 		h.logger.Error("payment intent create failed",
-			zap.Int64("amount_minor", req.AmountMinor),
+			zap.Int64("amount", req.Amount),
 			zap.String("currency", req.Currency),
 			zap.String("method", req.Method),
 			zap.Error(err),
@@ -130,13 +130,13 @@ func (h *PaymentIntentHandler) Create(w http.ResponseWriter, r *http.Request) {
 		zap.String("pi_id", result.PaymentIntent.ID),
 		zap.String("status", string(result.PaymentIntent.Status)),
 		zap.String("merchant_id", merchantID),
-		zap.Int64("amount_minor", req.AmountMinor),
+		zap.Int64("amount", req.Amount),
 	)
 
 	resp := piResponse{
 		ID:            result.PaymentIntent.ID,
 		MerchantID:    result.PaymentIntent.MerchantID,
-		AmountMinor:   result.PaymentIntent.AmountMinor,
+		Amount:   result.PaymentIntent.Amount,
 		Currency:      result.PaymentIntent.Currency,
 		Status:        string(result.PaymentIntent.Status),
 		Method:        string(result.PaymentIntent.Method),
@@ -173,7 +173,7 @@ func (h *PaymentIntentHandler) Get(w http.ResponseWriter, r *http.Request) {
 	resp := piResponse{
 		ID:            pi.ID,
 		MerchantID:    pi.MerchantID,
-		AmountMinor:   pi.AmountMinor,
+		Amount:   pi.Amount,
 		Currency:      pi.Currency,
 		Status:        string(pi.Status),
 		Method:        string(pi.Method),
