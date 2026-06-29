@@ -14,8 +14,11 @@ import (
 	"zia/internal/repository"
 	"zia/internal/risk"
 	"zia/internal/routing"
+	"zia/internal/telemetry"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 )
 
@@ -246,7 +249,16 @@ func (e *Engine) CreatePaymentIntent(ctx context.Context, req CreatePIRequest) (
 		zap.String("customer_phone", colReq.CustomerPhone),
 	)
 
+	attrs := metric.WithAttributes(
+		attribute.String("psp", route.Primary),
+		attribute.String("method", string(req.Method)),
+	)
+	telemetry.PaymentAttempts.Add(ctx, 1, attrs)
+
+	colStart := time.Now()
 	colResult, err := conn.InitiateCollection(ctx, colReq)
+	telemetry.ConnectorLatency.Record(ctx, time.Since(colStart).Seconds(), attrs)
+
 	if err != nil {
 		e.logger.Error("connector InitiateCollection failed",
 			zap.String("psp", route.Primary),
@@ -398,9 +410,15 @@ func (e *Engine) HandleWebhookEvent(ctx context.Context, evt connector.WebhookEv
 	case "succeeded":
 		newPIStatus = domain.PISucceeded
 		newAttemptStatus = domain.AttemptSucceeded
+		telemetry.PaymentSucceeded.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("psp", evt.PSP),
+		))
 	case "failed":
 		newPIStatus = domain.PIFailed
 		newAttemptStatus = domain.AttemptFailed
+		telemetry.PaymentFailed.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("psp", evt.PSP),
+		))
 	default:
 		return fmt.Errorf("unknown webhook event status: %s", evt.Status)
 	}

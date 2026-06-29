@@ -383,26 +383,34 @@ func (h *PortalHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	}
 	h.otpStore.delete(data.Phone)
 
-	merchantID := uuid.New().String()
-	merchantCode, err := generateMerchantCode()
-	if err != nil {
-		h.logger.Error("generate merchant code", zap.Error(err))
-		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
-		return
-	}
-	merchant := &domain.Merchant{
-		ID:              merchantID,
-		Code:            merchantCode,
-		LegalName:       data.Company,
-		Country:         data.Country,
-		DefaultCurrency: data.Currency,
-		Status:          domain.MerchantActive,
-		CreatedAt:       time.Now(),
-	}
-	if err := h.merchantRepo.Create(r.Context(), merchant); err != nil {
-		h.logger.Error("merchant create", zap.Error(err))
-		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Failed to create workspace")
-		return
+	var invitedBy string // merchantID that invited this user, if any
+	var merchantID string
+	invitation, invErr := h.teamInviteRepo.GetByEmailGlobal(r.Context(), data.Email)
+	if invErr == nil && invitation != nil {
+		invitedBy = invitation.MerchantID
+		merchantID = invitation.MerchantID
+	} else {
+		merchantID = uuid.New().String()
+		merchantCode, err := generateMerchantCode()
+		if err != nil {
+			h.logger.Error("generate merchant code", zap.Error(err))
+			respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
+			return
+		}
+		merchant := &domain.Merchant{
+			ID:              merchantID,
+			Code:            merchantCode,
+			LegalName:       data.Company,
+			Country:         data.Country,
+			DefaultCurrency: data.Currency,
+			Status:          domain.MerchantActive,
+			CreatedAt:       time.Now(),
+		}
+		if err := h.merchantRepo.Create(r.Context(), merchant); err != nil {
+			h.logger.Error("merchant create", zap.Error(err))
+			respondPortalError(w, r, http.StatusInternalServerError, "1007", "Failed to create workspace")
+			return
+		}
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(data.Password), bcrypt.DefaultCost)
@@ -432,6 +440,31 @@ func (h *PortalHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if invitedBy != "" {
+		initials := memberInitials(data.Name)
+		member := &domain.TeamMember{
+			ID:         uuid.New().String(),
+			MerchantID: merchantID,
+			UserID:     user.ID,
+			Name:       data.Name,
+			Email:      data.Email,
+			Role:       role,
+			Initials:   initials,
+			CreatedAt:  time.Now(),
+		}
+		if err := h.teamMemberRepo.Create(r.Context(), member); err != nil {
+			h.logger.Error("create team member from invitation", zap.Error(err))
+		}
+		h.teamInviteRepo.DeleteByEmail(r.Context(), merchantID, data.Email)
+	}
+
+	merchant, err := h.merchantRepo.GetByID(r.Context(), merchantID)
+	if err != nil {
+		h.logger.Error("merchant lookup after signup", zap.Error(err))
+		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
+		return
+	}
+
 	// Auto-login: issue a session so the client doesn't need a separate login call.
 	session := &domain.Session{
 		ID:        uuid.New().String(),
@@ -443,7 +476,7 @@ func (h *PortalHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	if err := h.sessionRepo.Create(r.Context(), session); err != nil {
 		h.logger.Error("session create after signup", zap.Error(err))
 		// Non-fatal: return success without a token; client can log in separately.
-		respond(w, r, http.StatusOK, map[string]any{"success": true, "merchantCode": merchantCode})
+		respond(w, r, http.StatusOK, map[string]any{"success": true})
 		return
 	}
 
@@ -457,6 +490,15 @@ func (h *PortalHandler) Signup(w http.ResponseWriter, r *http.Request) {
 			"title": user.Title,
 		},
 		"workspace": map[string]any{
+			"id":              merchant.ID,
+			"code":            merchant.Code,
+			"legalName":       merchant.LegalName,
+			"country":         merchant.Country,
+			"defaultCurrency": merchant.DefaultCurrency,
+			"status":          merchant.Status,
+			"createdAt":       merchant.CreatedAt,
+		},
+		"merchant": map[string]any{
 			"id":              merchant.ID,
 			"code":            merchant.Code,
 			"legalName":       merchant.LegalName,
@@ -917,6 +959,58 @@ func (h *PortalHandler) RevokeInvitation(w http.ResponseWriter, r *http.Request)
 	respond(w, r, http.StatusOK, map[string]bool{"success": true})
 }
 
+func (h *PortalHandler) AcceptInvitation(w http.ResponseWriter, r *http.Request) {
+	userID := h.getUserID(r)
+	token := r.PathValue("token")
+
+	inv, err := h.teamInviteRepo.GetByToken(r.Context(), token)
+	if err != nil {
+		respondPortalError(w, r, http.StatusNotFound, "1003", "Invitation not found or expired")
+		return
+	}
+
+	user, err := h.userRepo.GetByID(r.Context(), userID)
+	if err != nil {
+		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
+		return
+	}
+	if user.Email != inv.Email {
+		respondPortalError(w, r, http.StatusForbidden, "1004", "This invitation is for a different email address")
+		return
+	}
+
+	member := &domain.TeamMember{
+		ID:         uuid.New().String(),
+		MerchantID: inv.MerchantID,
+		UserID:     user.ID,
+		Name:       user.Name,
+		Email:      user.Email,
+		Role:       inv.Role,
+		Initials:   memberInitials(user.Name),
+		CreatedAt:  time.Now(),
+	}
+	if err := h.teamMemberRepo.Create(r.Context(), member); err != nil {
+		h.logger.Error("create team member on accept", zap.Error(err))
+		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Failed to accept invitation")
+		return
+	}
+
+	h.teamInviteRepo.DeleteByEmail(r.Context(), inv.MerchantID, inv.Email)
+
+	respond(w, r, http.StatusOK, map[string]bool{"success": true})
+}
+
+func memberInitials(name string) string {
+	parts := strings.Fields(name)
+	if len(parts) == 0 {
+		return ""
+	}
+	if len(parts) == 1 {
+		return strings.ToUpper(parts[0][:1])
+	}
+	return strings.ToUpper(parts[0][:1] + parts[len(parts)-1][:1])
+}
+
 // --- developer ---
 
 func (h *PortalHandler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
@@ -1084,6 +1178,78 @@ func (h *PortalHandler) ListWebhookEvents(w http.ResponseWriter, r *http.Request
 		})
 	}
 	respond(w, r, http.StatusOK, map[string]any{"events": resp})
+}
+
+// --- workspace ---
+
+func (h *PortalHandler) GetWorkspace(w http.ResponseWriter, r *http.Request) {
+	merchant, err := h.merchantRepo.GetByID(r.Context(), h.getMerchantID(r))
+	if err != nil {
+		respondPortalError(w, r, http.StatusNotFound, "1003", "Workspace not found")
+		return
+	}
+	respond(w, r, http.StatusOK, map[string]any{
+		"id":              merchant.ID,
+		"code":            merchant.Code,
+		"legalName":       merchant.LegalName,
+		"country":         merchant.Country,
+		"defaultCurrency": merchant.DefaultCurrency,
+		"status":          merchant.Status,
+		"createdAt":       merchant.CreatedAt,
+	})
+}
+
+type updateWorkspaceRequest struct {
+	LegalName       string `json:"legalName"`
+	Country         string `json:"country"`
+	DefaultCurrency string `json:"defaultCurrency"`
+}
+
+func (h *PortalHandler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
+	merchantID := h.getMerchantID(r)
+
+	var env RequestEnvelope
+	if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
+		respondPortalError(w, r, http.StatusBadRequest, "1001", "Invalid request")
+		return
+	}
+	var req updateWorkspaceRequest
+	if err := json.Unmarshal(env.PrimaryData, &req); err != nil {
+		respondPortalError(w, r, http.StatusBadRequest, "1001", "Invalid workspace data")
+		return
+	}
+
+	merchant, err := h.merchantRepo.GetByID(r.Context(), merchantID)
+	if err != nil {
+		respondPortalError(w, r, http.StatusNotFound, "1003", "Workspace not found")
+		return
+	}
+
+	if req.LegalName != "" {
+		merchant.LegalName = req.LegalName
+	}
+	if req.Country != "" {
+		merchant.Country = req.Country
+	}
+	if req.DefaultCurrency != "" {
+		merchant.DefaultCurrency = req.DefaultCurrency
+	}
+
+	if err := h.merchantRepo.Update(r.Context(), merchant); err != nil {
+		h.logger.Error("update workspace", zap.Error(err))
+		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Failed to update workspace")
+		return
+	}
+
+	respond(w, r, http.StatusOK, map[string]any{
+		"id":              merchant.ID,
+		"code":            merchant.Code,
+		"legalName":       merchant.LegalName,
+		"country":         merchant.Country,
+		"defaultCurrency": merchant.DefaultCurrency,
+		"status":          merchant.Status,
+		"createdAt":       merchant.CreatedAt,
+	})
 }
 
 // --- notifications ---

@@ -55,7 +55,7 @@ func loadConfig() config {
 			Password:    getEnv("OO_PASSWORD", ""),
 			ServiceName: getEnv("OO_SERVICE_NAME", "zia-api"),
 			Environment: getEnv("OO_ENVIRONMENT", "development"),
-			SampleRate:  1.0,
+			SampleRate:  getEnvFloat("OO_SAMPLE_RATE", 1.0),
 		},
 	}
 }
@@ -87,10 +87,11 @@ func main() {
 		}
 	}()
 
-	logger, err := zap.NewProduction()
+	baseLogger, err := zap.NewProduction()
 	if err != nil {
 		log.Fatalf("failed to create logger: %v", err)
 	}
+	logger := telemetry.BridgeLogger(baseLogger, cfg.telemetry.ServiceName)
 	defer func() { _ = logger.Sync() }()
 	zap.ReplaceGlobals(logger)
 
@@ -250,6 +251,15 @@ func main() {
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func getEnvFloat(key string, fallback float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
 	}
 	return fallback
 }

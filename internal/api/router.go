@@ -25,6 +25,7 @@ type Dependencies struct {
 func NewRouter(deps Dependencies) http.Handler {
 	r := chi.NewRouter()
 
+	r.Use(Tracing)
 	r.Use(RequestID)
 	r.Use(ConversationID)
 	r.Use(Logger(deps.Logger))
@@ -75,6 +76,7 @@ func NewRouter(deps Dependencies) http.Handler {
 				auth.Post("/team/invite", deps.PortalHandler.InviteMember)
 				auth.Post("/team/invitations/{email}/resend", deps.PortalHandler.ResendInvitation)
 				auth.Delete("/team/invitations/{email}/revoke", deps.PortalHandler.RevokeInvitation)
+				auth.Post("/team/invitations/{token}/accept", deps.PortalHandler.AcceptInvitation)
 				auth.Get("/developer/keys", deps.PortalHandler.ListAPIKeys)
 				auth.Post("/developer/keys/create", deps.PortalHandler.CreateAPIKey)
 				auth.Get("/developer/webhooks", deps.PortalHandler.ListWebhookEndpoints)
@@ -86,6 +88,8 @@ func NewRouter(deps Dependencies) http.Handler {
 				auth.Post("/notifications/preferences", deps.PortalHandler.UpdateNotificationPreferences)
 				auth.Get("/profile", deps.PortalHandler.GetProfile)
 				auth.Post("/profile/update", deps.PortalHandler.UpdateProfile)
+				auth.Get("/workspace", deps.PortalHandler.GetWorkspace)
+				auth.Put("/workspace", deps.PortalHandler.UpdateWorkspace)
 			})
 		})
 	}

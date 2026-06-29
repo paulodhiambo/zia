@@ -11,6 +11,7 @@ type MerchantRepository interface {
 	Create(ctx context.Context, m *domain.Merchant) error
 	GetByID(ctx context.Context, id string) (*domain.Merchant, error)
 	ListAll(ctx context.Context) ([]domain.Merchant, error)
+	Update(ctx context.Context, m *domain.Merchant) error
 	UpdateSettlementConfig(ctx context.Context, id string, config []byte) error
 	CreateAPIKey(ctx context.Context, k *domain.APIKey) error
 	ListAPIKeys(ctx context.Context, merchantID string) ([]domain.APIKey, error)
@@ -53,6 +54,15 @@ func (r *merchantRepo) UpdateSettlementConfig(ctx context.Context, id string, co
 	_, err := r.db.Exec(ctx,
 		`UPDATE merchants SET settlement_config = $1 WHERE id = $2`,
 		config, id)
+	return err
+}
+
+func (r *merchantRepo) Update(ctx context.Context, m *domain.Merchant) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE merchants
+		SET legal_name = $1, country = $2, default_currency = $3
+		WHERE id = $4`,
+		m.LegalName, m.Country, m.DefaultCurrency, m.ID)
 	return err
 }
 

@@ -9,6 +9,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -98,6 +102,33 @@ type responseWriter struct {
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.status = code
 	rw.ResponseWriter.WriteHeader(code)
+}
+
+// Tracing starts an OTel server span for every request and propagates the
+// trace context. Must be added to the chi router (not wrapping it externally)
+// so chi.RouteContext is available for low-cardinality span names.
+func Tracing(next http.Handler) http.Handler {
+	tracer := otel.Tracer("zia/api")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		route := r.URL.Path
+		if rctx := chi.RouteContext(r.Context()); rctx != nil && rctx.RoutePattern() != "" {
+			route = rctx.RoutePattern()
+		}
+		ctx, span := tracer.Start(r.Context(), r.Method+" "+route,
+			trace.WithSpanKind(trace.SpanKindServer),
+			trace.WithAttributes(
+				attribute.String("http.method", r.Method),
+				attribute.String("http.route", route),
+				attribute.String("http.url", r.URL.String()),
+			),
+		)
+		defer span.End()
+
+		ww := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(ww, r.WithContext(ctx))
+
+		span.SetAttributes(attribute.Int("http.status_code", ww.status))
+	})
 }
 
 func Recoverer(log *zap.Logger) func(next http.Handler) http.Handler {

@@ -37,6 +37,8 @@ type TeamInvitationRepository interface {
 	Upsert(ctx context.Context, inv *domain.TeamInvitation) error
 	ListByMerchant(ctx context.Context, merchantID string) ([]domain.TeamInvitation, error)
 	GetByEmail(ctx context.Context, merchantID, email string) (*domain.TeamInvitation, error)
+	GetByEmailGlobal(ctx context.Context, email string) (*domain.TeamInvitation, error)
+	GetByToken(ctx context.Context, token string) (*domain.TeamInvitation, error)
 	DeleteByEmail(ctx context.Context, merchantID, email string) error
 }
 
@@ -231,6 +233,22 @@ func (r *teamInvitationRepo) ListByMerchant(ctx context.Context, merchantID stri
 func (r *teamInvitationRepo) GetByEmail(ctx context.Context, merchantID, email string) (*domain.TeamInvitation, error) {
 	inv := &domain.TeamInvitation{}
 	err := r.db.QueryRow(ctx, `SELECT id,merchant_id,email,role,token,expires_at,created_at FROM team_invitations WHERE merchant_id=$1 AND email=$2`, merchantID, email).Scan(&inv.ID, &inv.MerchantID, &inv.Email, &inv.Role, &inv.Token, &inv.ExpiresAt, &inv.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return inv, nil
+}
+func (r *teamInvitationRepo) GetByEmailGlobal(ctx context.Context, email string) (*domain.TeamInvitation, error) {
+	inv := &domain.TeamInvitation{}
+	err := r.db.QueryRow(ctx, `SELECT id,merchant_id,email,role,token,expires_at,created_at FROM team_invitations WHERE email=$1 AND expires_at>now() ORDER BY created_at DESC LIMIT 1`, email).Scan(&inv.ID, &inv.MerchantID, &inv.Email, &inv.Role, &inv.Token, &inv.ExpiresAt, &inv.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return inv, nil
+}
+func (r *teamInvitationRepo) GetByToken(ctx context.Context, token string) (*domain.TeamInvitation, error) {
+	inv := &domain.TeamInvitation{}
+	err := r.db.QueryRow(ctx, `SELECT id,merchant_id,email,role,token,expires_at,created_at FROM team_invitations WHERE token=$1 AND expires_at>now()`, token).Scan(&inv.ID, &inv.MerchantID, &inv.Email, &inv.Role, &inv.Token, &inv.ExpiresAt, &inv.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
