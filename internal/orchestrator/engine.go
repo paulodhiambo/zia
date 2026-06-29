@@ -351,6 +351,10 @@ func (e *Engine) GetPaymentIntent(ctx context.Context, id string) (*domain.Payme
 	return e.piRepo.GetByID(ctx, id)
 }
 
+func (e *Engine) GetAttemptByPSPReference(ctx context.Context, psp, pspReference string) (*domain.Attempt, error) {
+	return e.attRepo.GetByPSPReference(ctx, psp, pspReference)
+}
+
 func (e *Engine) HandleWebhookEvent(ctx context.Context, evt connector.WebhookEvent) error {
 	e.logger.Info("handling webhook event",
 		zap.String("psp", evt.PSP),

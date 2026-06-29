@@ -20,6 +20,7 @@ import (
 	"zia/internal/domain"
 	"zia/internal/ledger"
 	"zia/internal/repository"
+	"zia/internal/webhook"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -39,7 +40,9 @@ type PortalHandler struct {
 	teamInviteRepo   repository.TeamInvitationRepository
 	webhookEPRepo    repository.WebhookEndpointRepository
 	webhookEventRepo repository.WebhookEventRepository
+	delRepo          repository.WebhookDeliveryRepository
 	notifRepo        repository.NotificationRepository
+	whDispatcher     *webhook.Dispatcher
 	otpStore         *otpStore
 	smsSender        *smsSender
 	logger           *zap.Logger
@@ -166,7 +169,9 @@ func NewPortalHandler(
 	teamInviteRepo repository.TeamInvitationRepository,
 	webhookEPRepo repository.WebhookEndpointRepository,
 	webhookEventRepo repository.WebhookEventRepository,
+	delRepo repository.WebhookDeliveryRepository,
 	notifRepo repository.NotificationRepository,
+	whDispatcher *webhook.Dispatcher,
 	logger *zap.Logger,
 ) *PortalHandler {
 	otpS := newOTPStore()
@@ -189,7 +194,9 @@ func NewPortalHandler(
 		teamInviteRepo:   teamInviteRepo,
 		webhookEPRepo:    webhookEPRepo,
 		webhookEventRepo: webhookEventRepo,
+		delRepo:          delRepo,
 		notifRepo:        notifRepo,
+		whDispatcher:     whDispatcher,
 		otpStore:         otpS,
 		smsSender:        sms,
 		logger:           logger,
@@ -1361,6 +1368,62 @@ func (h *PortalHandler) ListWebhookEvents(w http.ResponseWriter, r *http.Request
 		})
 	}
 	respond(w, r, http.StatusOK, map[string]any{"events": resp})
+}
+
+func (h *PortalHandler) ListWebhookDeliveries(w http.ResponseWriter, r *http.Request) {
+	whEventID := r.PathValue("id")
+
+	whEvent, err := h.webhookEventRepo.GetByID(r.Context(), whEventID)
+	if err != nil {
+		respondPortalError(w, r, http.StatusNotFound, "1003", "Webhook event not found")
+		return
+	}
+	_ = whEvent
+
+	dels, err := h.delRepo.ListByEvent(r.Context(), whEventID)
+	if err != nil {
+		h.logger.Error("list webhook deliveries", zap.Error(err))
+		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
+		return
+	}
+
+	resp := make([]map[string]any, 0, len(dels))
+	for _, d := range dels {
+		resp = append(resp, map[string]any{
+			"id":             d.ID,
+			"url":            d.URL,
+			"status":         string(d.Status),
+			"responseStatus": d.ResponseStatus,
+			"durationMs":     d.DurationMs,
+			"attempt":        d.Attempt,
+			"maxAttempts":    d.MaxAttempts,
+			"nextRetryAt":    d.NextRetryAt,
+			"createdAt":      d.CreatedAt,
+		})
+	}
+	respond(w, r, http.StatusOK, map[string]any{"deliveries": resp})
+}
+
+func (h *PortalHandler) RetryWebhookDelivery(w http.ResponseWriter, r *http.Request) {
+	deliveryID := r.PathValue("deliveryId")
+
+	del, err := h.delRepo.GetByID(r.Context(), deliveryID)
+	if err != nil {
+		respondPortalError(w, r, http.StatusNotFound, "1003", "Delivery not found")
+		return
+	}
+	if del.Status != domain.DeliveryFailed {
+		respondPortalError(w, r, http.StatusBadRequest, "1001", "Delivery is not in failed state")
+		return
+	}
+
+	if err := h.whDispatcher.Retry(r.Context(), deliveryID); err != nil {
+		h.logger.Error("retry webhook delivery", zap.String("delivery_id", deliveryID), zap.Error(err))
+		respondPortalError(w, r, http.StatusInternalServerError, "1007", "Internal error")
+		return
+	}
+
+	respond(w, r, http.StatusOK, map[string]bool{"success": true})
 }
 
 // --- workspace ---

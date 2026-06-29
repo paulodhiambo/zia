@@ -135,6 +135,7 @@ func main() {
 	teamMemberRepo := repository.NewTeamMemberRepo(pool)
 	teamInviteRepo := repository.NewTeamInvitationRepo(pool)
 	webhookEPRepo := repository.NewWebhookEndpointRepo(pool)
+	delRepo := repository.NewWebhookDeliveryRepo(pool)
 	notifRepo := repository.NewNotificationRepo(pool)
 	idempotencyStore := idempotency.NewStore(rdb)
 	riskEng := risk.NewEngine()
@@ -194,7 +195,8 @@ func main() {
 		},
 	)
 
-	webhookProc := webhook.NewProcessor(orc, js, logger)
+	whDispatcher := webhook.NewDispatcher(attRepo, piRepo, webhookEPRepo, delRepo, logger)
+	webhookProc := webhook.NewProcessor(orc, whDispatcher, js, logger)
 
 	piSvc := service.NewPaymentIntent(orc)
 
@@ -204,7 +206,7 @@ func main() {
 	checkoutHandler := api.NewCheckoutHandler(piSvc, checkoutRepo, piRepo, logger)
 	portalHandler := api.NewPortalHandler(
 		userRepo, sessionRepo, merchantRepo, piRepo, attRepo, payoutRepo, ledRepo,
-		customerRepo, teamMemberRepo, teamInviteRepo, webhookEPRepo, whRepo, notifRepo, logger,
+		customerRepo, teamMemberRepo, teamInviteRepo, webhookEPRepo, whRepo, delRepo, notifRepo, whDispatcher, logger,
 	)
 	authMiddleware := authn.Middleware(merchantRepo)
 	sessionMiddleware := api.PortalAuth(sessionRepo)

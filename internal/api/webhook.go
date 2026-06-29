@@ -120,12 +120,6 @@ func (h *WebhookHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 			zap.String("psp", psp),
 			zap.Error(err),
 		)
-		if err := h.publisher.HandleEvent(r.Context(), event); err != nil {
-			h.logger.Error("sync webhook processing failed",
-				zap.String("psp", psp),
-				zap.String("psp_reference", event.PSPReference),
-				zap.Error(err),
-			)
-		}
+		h.publisher.HandleEventAndDispatch(r.Context(), event, wh.ID)
 	}
 }

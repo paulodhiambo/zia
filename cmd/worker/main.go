@@ -113,6 +113,8 @@ func main() {
 	attRepo := repository.NewAttempt(pool)
 	ledRepo := repository.NewLedger(pool)
 	notifRepo := repository.NewNotificationRepo(pool)
+	webhookEPRepo := repository.NewWebhookEndpointRepo(pool)
+	delRepo := repository.NewWebhookDeliveryRepo(pool)
 	idempotencyStore := idempotency.NewStore(rdb)
 	riskEng := risk.NewEngine()
 	cb := routing.NewCircuitBreaker()
@@ -156,7 +158,8 @@ func main() {
 		},
 	)
 
-	processor := webhook.NewProcessor(orc, js, logger)
+	whDispatcher := webhook.NewDispatcher(attRepo, piRepo, webhookEPRepo, delRepo, logger)
+	processor := webhook.NewProcessor(orc, whDispatcher, js, logger)
 
 	if err := notifDispatcher.StartConsumer(ctx); err != nil {
 		logger.Fatal("failed to start notification consumer", zap.Error(err))

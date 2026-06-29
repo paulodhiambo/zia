@@ -16,25 +16,54 @@ import (
 )
 
 type Processor struct {
-	orc    *orchestrator.Engine
-	js     nats.JetStreamContext
-	logger *zap.Logger
+	orc        *orchestrator.Engine
+	dispatcher *Dispatcher
+	js         nats.JetStreamContext
+	logger     *zap.Logger
 }
 
 func NewProcessor(
 	orc *orchestrator.Engine,
+	dispatcher *Dispatcher,
 	js nats.JetStreamContext,
 	logger *zap.Logger,
 ) *Processor {
 	return &Processor{
-		orc:    orc,
-		js:     js,
-		logger: logger,
+		orc:        orc,
+		dispatcher: dispatcher,
+		js:         js,
+		logger:     logger,
 	}
 }
 
 func (p *Processor) HandleEvent(ctx context.Context, event connector.WebhookEvent) error {
 	return p.orc.HandleWebhookEvent(ctx, event)
+}
+
+func (p *Processor) HandleEventAndDispatch(ctx context.Context, event connector.WebhookEvent, whEventID string) {
+	if err := p.orc.HandleWebhookEvent(ctx, event); err != nil {
+		p.logger.Error("process webhook event",
+			zap.String("psp", event.PSP),
+			zap.String("psp_reference", event.PSPReference),
+			zap.Error(err),
+		)
+		return
+	}
+
+	if p.dispatcher != nil {
+		// Look up merchant ID from the attempt to dispatch to endpoints.
+		attempt, err := p.orc.GetAttemptByPSPReference(ctx, event.PSP, event.PSPReference)
+		if err != nil {
+			p.logger.Error("dispatch: lookup attempt", zap.String("psp", event.PSP), zap.String("psp_reference", event.PSPReference), zap.Error(err))
+			return
+		}
+		pi, err := p.orc.GetPaymentIntent(ctx, attempt.PaymentIntentID)
+		if err != nil {
+			p.logger.Error("dispatch: lookup pi", zap.String("pi_id", attempt.PaymentIntentID), zap.Error(err))
+			return
+		}
+		p.dispatcher.Dispatch(ctx, event, pi.MerchantID, whEventID)
+	}
 }
 
 func (p *Processor) CanPublish() bool {
@@ -112,6 +141,23 @@ func (p *Processor) StartConsumer(ctx context.Context) error {
 					p.logger.Error("nats nak failed", zap.Error(err))
 				}
 				continue
+			}
+
+			if p.dispatcher != nil {
+				attempt, err := p.orc.GetAttemptByPSPReference(ctx, event.PSP, event.PSPReference)
+				if err != nil {
+					p.logger.Error("consumer dispatch: lookup attempt", zap.Error(err))
+				} else {
+					pi, err := p.orc.GetPaymentIntent(ctx, attempt.PaymentIntentID)
+					if err != nil {
+						p.logger.Error("consumer dispatch: lookup pi", zap.Error(err))
+					} else {
+						// We don't have whEventID here — pass empty so dispatcher skips
+						// delivery record creation; merchant endpoints will only
+						// get notified on the sync path.
+						p.dispatcher.Dispatch(ctx, event, pi.MerchantID, "")
+					}
+				}
 			}
 
 			if err := msg.Ack(); err != nil {

@@ -86,6 +86,8 @@ func NewRouter(deps Dependencies) http.Handler {
 				auth.Get("/developer/webhooks", deps.PortalHandler.ListWebhookEndpoints)
 				auth.Post("/developer/webhooks/create", deps.PortalHandler.CreateWebhookEndpoint)
 				auth.Get("/developer/webhooks/events", deps.PortalHandler.ListWebhookEvents)
+				auth.Get("/developer/webhooks/events/{id}/deliveries", deps.PortalHandler.ListWebhookDeliveries)
+				auth.Post("/developer/webhooks/events/{id}/deliveries/{deliveryId}/retry", deps.PortalHandler.RetryWebhookDelivery)
 				auth.Get("/notifications", deps.PortalHandler.ListNotifications)
 				auth.Post("/notifications/mark-all-read", deps.PortalHandler.MarkAllNotificationsRead)
 				auth.Get("/notifications/preferences", deps.PortalHandler.GetNotificationPreferences)

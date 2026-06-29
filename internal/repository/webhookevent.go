@@ -8,6 +8,7 @@ import (
 
 type WebhookEventRepository interface {
 	Create(ctx context.Context, e *domain.WebhookEvent) error
+	GetByID(ctx context.Context, id string) (*domain.WebhookEvent, error)
 	GetByDedupKey(ctx context.Context, dedupKey string) (*domain.WebhookEvent, error)
 	UpdateProcessingStatus(ctx context.Context, id string, status domain.WebhookProcessingStatus) error
 	ListByMerchant(ctx context.Context, merchantID string, limit int) ([]domain.WebhookEvent, error)
@@ -50,6 +51,20 @@ func (r *webhookEventRepo) UpdateProcessingStatus(ctx context.Context, id string
 		`UPDATE webhook_events SET processing_status = $1 WHERE id = $2`,
 		status, id)
 	return err
+}
+
+func (r *webhookEventRepo) GetByID(ctx context.Context, id string) (*domain.WebhookEvent, error) {
+	e := &domain.WebhookEvent{}
+	err := r.db.QueryRow(ctx, `
+		SELECT id, psp, event_type, psp_reference, dedup_key, payload,
+			processing_status, received_at
+		FROM webhook_events WHERE id = $1`, id).Scan(
+		&e.ID, &e.PSP, &e.EventType, &e.PSPReference, &e.DedupKey,
+		&e.Payload, &e.ProcessingStatus, &e.ReceivedAt)
+	if err != nil {
+		return nil, err
+	}
+	return e, nil
 }
 
 func (r *webhookEventRepo) ListByMerchant(ctx context.Context, merchantID string, limit int) ([]domain.WebhookEvent, error) {

@@ -44,6 +44,7 @@ type TeamInvitationRepository interface {
 
 type WebhookEndpointRepository interface {
 	Create(ctx context.Context, w *domain.WebhookEndpoint) error
+	GetByID(ctx context.Context, id string) (*domain.WebhookEndpoint, error)
 	ListByMerchant(ctx context.Context, merchantID string) ([]domain.WebhookEndpoint, error)
 }
 
@@ -278,6 +279,15 @@ func (r *webhookEndpointRepo) ListByMerchant(ctx context.Context, merchantID str
 		ws = append(ws, w)
 	}
 	return ws, nil
+}
+
+func (r *webhookEndpointRepo) GetByID(ctx context.Context, id string) (*domain.WebhookEndpoint, error) {
+	w := &domain.WebhookEndpoint{}
+	err := r.db.QueryRow(ctx, `SELECT id,merchant_id,url,events,status,created_at FROM webhook_endpoints WHERE id=$1`, id).Scan(&w.ID, &w.MerchantID, &w.URL, &w.Events, &w.Status, &w.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return w, nil
 }
 
 func (r *notificationRepo) Create(ctx context.Context, n *domain.Notification) error {
