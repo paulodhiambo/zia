@@ -1,6 +1,6 @@
 # Payment Aggregator / Switch — Technical Architecture (V1)
 
-**Stack:** Go (Golang)
+**Stack:** Go 1.26
 **Forward-looking requirement:** the core must expose a session/token-based API that a future embeddable JS widget can drive without redesign.
 
 ---
@@ -15,7 +15,7 @@
 
 ### 1.2 Non-Goals (V1)
 - Becoming a licensed deposit-taking institution or e-money issuer — this system is a **switch/orchestrator**, not a bank. Funds custody/settlement timing must respect each PSP's and Kenya's regulatory model (see §15).
-- Card data custody — no raw PAN ever touches our servers (we use Stripe Elements / Paystack inline / PayPal SDK tokenization at the edge; see §10).
+- Card data custody — no raw PAN ever touches our servers (we use Paystack's hosted/inline tokenization for V1; Stripe Elements and PayPal SDK are V2+; see §10).
 - Multi-region active-active from day one (designed for, not built for, in V1).
 
 ---
@@ -60,19 +60,16 @@ flowchart TB
         SET[Settlement & Payout Service]
     end
 
-    subgraph Conn["Connector Layer"]
+    subgraph Conn["Connector Layer (V1)"]
         CMP[M-Pesa Connector]
-        CPP[PayPal Connector]
         CPS[Paystack Connector]
-        CST[Stripe Connector]
     end
 
     subgraph Infra["Infrastructure"]
         PG[(PostgreSQL<br/>system of record)]
         RDS[(Redis<br/>cache/idempotency/locks)]
-        MQ[(Kafka/NATS JetStream<br/>event bus)]
-        VLT[(Vault / KMS<br/>secrets, encryption keys)]
-        OBS[(Prometheus/Grafana/Loki/Tempo)]
+        MQ[(NATS JetStream<br/>event bus)]
+        OBS[(OpenObserve<br/>traces/metrics/logs via OTLP)]
     end
 
     MAPP -->|REST + HMAC signed| LB --> GW
@@ -95,7 +92,6 @@ flowchart TB
     SET --> LED
     Core --> PG
     Core --> RDS
-    Core --> VLT
     Core -.-> OBS
 ```
 
@@ -267,9 +263,8 @@ type PaymentIntent struct {
 type PaymentMethod string
 
 const (
-    MethodMpesaSTK   PaymentMethod = "mpesa_stk"
-    MethodCard       PaymentMethod = "card"           // routed to Stripe/Paystack/PayPal
-    MethodPaypal     PaymentMethod = "paypal_redirect"
+    MethodMpesaSTK PaymentMethod = "mpesa_stk" // routed to M-Pesa connector
+    MethodCard     PaymentMethod = "card"       // routed to Paystack in V1; Stripe/PayPal in V2+
 )
 
 // Attempt represents one concrete try against one PSP for one PaymentIntent.
@@ -386,12 +381,19 @@ type WebhookEvent struct {
 
 ### 5.1 Per-PSP connector notes
 
-| PSP | Primary use in V1 | Auth model | Confirmation style | Key implementation notes |
+**V1 (implemented):**
+
+| PSP | Primary use | Auth model | Confirmation style | Key implementation notes |
 |---|---|---|---|---|
-| **M-Pesa (Daraja 3.0)** | Customer collection (KE) | OAuth2 client-credentials, token cached ~55 min | STK Push is async: initiate → customer enters PIN on-device → Safaricom POSTs callback. No customer-visible redirect. | Use **C2B STK Push (Lipa Na M-Pesa Online)** for collection; **B2C** for refunds/payouts (separate Go-Live approval & `SecurityCredential`). Always run a **nightly Transaction Status reconciliation job** — callbacks are not 100% guaranteed delivery. Phone numbers normalized to `2547XXXXXXXX`. Respond `HTTP 200` to every callback within 30s, even on internal processing errors, to avoid Safaricom's aggressive retry storm; ack-then-process-async via the event bus. |
-| **PayPal** | Customer collection (intl) | OAuth2 client-credentials | Orders API v2: create order → customer approves (redirect or PayPal JS SDK button) → capture server-side. Webhooks confirm `CHECKOUT.ORDER.APPROVED` / `PAYMENT.CAPTURE.COMPLETED` | `NextAction.Type = "redirect"` (or embed via SDK once widget exists). Verify webhook signature via PayPal's transmission-signature verification API, not just shared secret. |
-| **Paystack** | Customer collection (cards + mobile money, pan-African) | Secret key, Bearer auth | `POST /transaction/initialize` → redirect to Paystack-hosted page or inline popup → `charge.success` webhook is source of truth (poll `/transaction/verify/:reference` as fallback) | Verify webhook via `x-paystack-signature` HMAC-SHA512. Good fallback/expansion rail for African card traffic alongside Stripe. |
-| **Stripe** | Customer collection (cards/wallets, global) | Secret key, Bearer auth | `PaymentIntents` API; client uses Stripe.js/Elements (tokenizes card client-side — **no PAN touches our servers**); `payment_intent.succeeded` webhook | Verify webhook via `Stripe-Signature` header + signing secret, with timestamp tolerance to prevent replay. This is the reference implementation for "PCI scope stays with the PSP." |
+| **M-Pesa (Daraja)** | Customer collection (KE) + B2C payouts | OAuth2 client-credentials, token cached ~55 min | STK Push is async: initiate → customer enters PIN on-device → Safaricom POSTs callback. No customer-visible redirect. | Use **C2B STK Push (Lipa Na M-Pesa Online)** for collection; **B2C** for refunds/payouts (separate Go-Live approval & `SecurityCredential`). Always run a **nightly Transaction Status reconciliation job** — callbacks are not 100% guaranteed delivery. Phone numbers normalized to `2547XXXXXXXX`. Daraja expects whole KES amounts, not minor units — divide `AmountMinor / 100` before sending. Respond `HTTP 200` to every callback within 30s to avoid Safaricom's aggressive retry storm; ack-then-process-async via NATS. |
+| **Paystack** | Customer collection (cards + mobile money, pan-African) | Secret key, Bearer auth | `POST /transaction/initialize` → redirect to Paystack-hosted page or inline popup → `charge.success` webhook is source of truth (poll `/transaction/verify/:reference` as fallback) | Verify webhook via `x-paystack-signature` HMAC-SHA512. Paystack uses the same domain for sandbox and production — the key type (test vs. live) determines the environment. |
+
+**V2+ (planned):**
+
+| PSP | Planned role | Notes |
+|---|---|---|
+| **Stripe** | Cards/wallets, global | `PaymentIntents` API + Stripe.js/Elements client-side tokenization (no PAN on our servers). Verify webhook via `Stripe-Signature` header + signing secret. |
+| **PayPal** | Cards/wallet, international | Orders API v2, redirect/approve/capture. Verify webhook via PayPal's transmission-signature API. |
 
 ---
 
@@ -468,15 +470,14 @@ type Router interface {
 }
 ```
 
-**V1 rule set (illustrative, stored as data not code):**
+**V1 rule set (in-memory defaults, hot-reloadable):**
 
-| Priority | Rule |
-|---|---|
-| 1 | Merchant has an explicit PSP override for this currency/method → use it |
-| 3 | `currency=KES` + `method=card` → primary `paystack`, fallback `stripe` |
-| 4 | International card traffic → primary `stripe`, fallback `paystack` (where supported) or `paypal` |
-| 5 | Customer explicitly chose PayPal at checkout → `paypal`, no fallback (PayPal customers expect PayPal) |
-| 7 | Default catch-all → highest-priority connector that lists the currency in `Capabilities.SupportedCurrencies` |
+| Priority | Method | Currency | Primary PSP | Fallbacks |
+|---|---|---|---|---|
+| 1 | `mpesa_stk` | `KES` | `mpesa` | — |
+| 2 | `card` | any | `paystack` | — |
+
+Rules are evaluated in priority order; the first match wins. Merchant-specific overrides and additional rails (Stripe, PayPal, Airtel Money) will be added as new rules without touching the engine code — that's the point of the rule-based design.
 
 
 ---
@@ -537,7 +538,7 @@ Nightly job per PSP:
 | Layer | Control |
 |---|---|
 | **PCI DSS scope minimization** | Card PAN never reaches our backend. Stripe Elements / Paystack inline-iframe / PayPal SDK tokenize client-side; we only ever see PSP-issued tokens/PaymentIntent IDs. This keeps us at **SAQ A** scope, not full PCI DSS Level 1 infra. |
-| **Secrets** | All PSP API keys/credentials/`SecurityCredential` (M-Pesa B2C cert) stored in **Vault/KMS**, never in env vars in plaintext in production, fetched at runtime with short-lived leases, rotated on a schedule and immediately on suspected compromise. |
+| **Secrets** | Local dev: `.env` file (never committed). Production: Helm `Secret` (rendered from `values.yaml` or a pre-existing secret managed by Sealed Secrets / External Secrets Operator). PSP keys, HMAC signing secret, and DB credentials are never baked into images or ConfigMaps. |
 | **Transport** | TLS 1.2+ everywhere; mTLS between internal services once split beyond the monolith. |
 | **Merchant API auth** | API key (public/secret pair) + **HMAC request signing** (timestamp + nonce + body hash) to prevent replay, mirroring how the future widget's public tokens will work. |
 | **Webhook auth** | Per-PSP signature verification (§8) + IP allowlisting where the PSP publishes static egress IPs (M-Pesa). |
@@ -551,59 +552,62 @@ Nightly job per PSP:
 
 | Concern | Choice | Why |
 |---|---|---|
-| Language | Go 1.23+ | Concurrency model fits high-throughput I/O-bound webhook/PSP traffic; static typing matters a lot for money code |
-| HTTP framework | `chi` or `net/http` + middleware (avoid heavy frameworks; payment APIs benefit from explicit, boring code) | Minimal magic, easy to audit |
-| Database | PostgreSQL | ACID transactions for ledger integrity; JSONB for flexible PSP raw-payload storage; mature, boring, well-understood |
-| Cache / locks / idempotency store | Redis | Idempotency key cache, distributed locks for "don't double-process this webhook", rate limiting |
-| Event bus | NATS JetStream (or Kafka if you anticipate very high volume / need long retention + replay for audit) | Decouples webhook ingestion from orchestration; enables retry/DLQ semantics natively |
-| Secrets/KMS | HashiCorp Vault (or cloud KMS — AWS KMS/GCP KMS) | Centralized, audited secret access |
-| Background jobs/cron | `river` (Postgres-backed queue) or a k8s CronJob runner | Reconciliation, settlement runs, token refresh |
-| Observability | OpenTelemetry → Prometheus (metrics) + Loki (logs) + Tempo/Jaeger (traces) + Grafana (dashboards) | Trace a single payment across connector calls, webhook processing, ledger posting |
-| Deployment | Docker + Kubernetes (or a managed PaaS for V1 to reduce ops burden — e.g. ECS/Fly.io/Render before justifying full K8s) | Start as simply as you can defend; the modular monolith doesn't need K8s on day one |
-| CI/CD | GitHub Actions, contract tests against PSP sandboxes, mandatory ledger-balance invariant tests | A failed "debits == credits" test should block deploy, full stop |
+| Language | Go 1.26 | Concurrency model fits high-throughput I/O-bound webhook/PSP traffic; static typing matters a lot for money code |
+| HTTP framework | `chi` + `net/http` middleware | Minimal magic, easy to audit |
+| Database | PostgreSQL 15+ | ACID transactions for ledger integrity; JSONB for flexible PSP raw-payload storage |
+| Cache / locks / idempotency store | Redis 7+ | Idempotency key cache, distributed locks for "don't double-process this webhook", dedup store |
+| Event bus | NATS JetStream | Decouples webhook ingestion from orchestration; the `worker` binary consumes asynchronously |
+| Secrets | `.env` (local) / Helm `Secret` (production) | Sensitive config is never in ConfigMaps or images; supports Sealed Secrets / External Secrets Operator |
+| Background jobs | NATS JetStream consumer (`cmd/worker`) + `cmd/cron` runner | Worker handles webhook events; cron handles reconciliation, settlement, token refresh |
+| Observability | OpenTelemetry → **OpenObserve** (OTLP for traces, metrics, logs) | Single backend; trace a payment from API → orchestrator → connector → webhook → ledger |
+| Deployment | Docker + Helm + **ArgoCD** (GitOps) | Helm chart manages ConfigMap + Secret split; ArgoCD syncs from git; HPA + PDB configured out of the box |
+| CI/CD | GitHub Actions; mandatory ledger-balance invariant tests | A failed "debits == credits" test blocks deploy |
 
 ---
 
-## 12. Suggested Go Project Structure
+## 12. Project Structure
 
 ```
-payswitch/
+zia/
 ├── cmd/
-│   ├── api/                  # main HTTP server entrypoint
-│   ├── worker/               # event bus consumers (webhooks, notifications)
-│   └── cron/                 # reconciliation, settlement, token-refresh jobs
+│   ├── api/                  # HTTP API server entrypoint
+│   ├── worker/               # NATS JetStream consumer (webhook processing, notifications)
+│   └── cron/                 # scheduled jobs (reconciliation, settlement, M-Pesa token refresh)
 ├── internal/
-│   ├── domain/                # core types: PaymentIntent, Attempt, LedgerEntry, etc.
-│   ├── orchestrator/          # the Switch — state machine, no PSP-specific code
-│   ├── routing/                # routing engine + rule storage
-│   ├── idempotency/
-│   ├── ledger/                 # double-entry posting logic, balance queries
-│   ├── reconciliation/
-│   ├── settlement/
-│   ├── webhook/                 # ingestion, dedup, dispatch
-│   ├── notification/             # merchant-facing webhook dispatcher with retry/backoff
-│   ├── risk/                      # rules engine (velocity checks, amount thresholds, blocklists)
-│   ├── checkout/                   # Checkout Session service (widget-facing, see §13)
-│   ├── merchant/                    # merchant + API key management
+│   ├── api/                  # HTTP handlers: portal, merchant, payment_intent, checkout, webhook
+│   ├── authn/                # API key authentication middleware
+│   ├── domain/               # core types: PaymentIntent, Attempt, LedgerEntry, Merchant, User, etc.
+│   ├── orchestrator/         # the Switch — state machine, no PSP-specific code
+│   ├── routing/              # rule-based routing engine + circuit breaker
+│   ├── idempotency/          # Redis-backed idempotency store
+│   ├── ledger/               # double-entry posting logic, balance queries
+│   ├── reconciliation/       # nightly reconciliation runner
+│   ├── settlement/           # settlement & payout runner
+│   ├── webhook/              # ingestion dedup, NATS publish, processor
+│   ├── notification/         # outbound merchant-webhook dispatcher
+│   ├── risk/                 # lightweight rules engine (velocity, thresholds, blocklists)
+│   ├── repository/           # DB access layer (pgx/v5): one file per domain
+│   ├── service/              # PaymentIntent service (orchestrates repo + orchestrator)
 │   └── connector/
-│       ├── connector.go              # the Connector interface (§5)
-│       ├── mpesa/
-│       ├── paypal/
-│       ├── paystack/
-│       ├── stripe/
+│       ├── connector.go      # Connector interface + shared types (§5)
+│       ├── registry.go       # runtime connector registry
+│       ├── mpesa/            # M-Pesa Daraja: auth, STK push, B2C, webhook parsing
+│       └── paystack/         # Paystack: initialize, verify, webhook parsing
 ├── pkg/
-│   ├── httpsign/                       # HMAC request signing helpers (shared client+server)
-│   └── moneyutil/                       # minor-unit arithmetic helpers, no floats anywhere
-├── migrations/
-├── deploy/
-│   ├── docker/
-│   └── k8s/
-└── test/
-    ├── contract/                          # per-PSP sandbox contract tests
-    └── e2e/
+│   ├── httpsign/             # HMAC request signing helpers (shared client + server)
+│   ├── moneyutil/            # minor-unit arithmetic helpers, no floats anywhere
+│   └── phoneutil/            # E.164 phone normalization (e.g. 0712 → 254712)
+├── migrations/               # golang-migrate SQL files (up + down)
+├── helm/                     # Helm chart: ConfigMap + Secret split, HPA, PDB, ingress
+├── argocd/                   # ArgoCD Application manifests
+├── api-tests/                # Postman collection for manual/smoke testing
+├── Dockerfile
+├── docker-compose.yml        # local dev: Postgres, Redis, NATS, OpenObserve
+├── Makefile
+└── .env.example
 ```
 
-Each `connector/<psp>/` package is self-contained: its own HTTP client, its own auth/token management, its own webhook parser, and a single exported type satisfying `connector.Connector`. This is what makes "PSP #7" a single new folder, not a cross-cutting change.
+Each `connector/<psp>/` package is self-contained: its own HTTP client, its own auth/token management, its own webhook parser, and a single exported type satisfying `connector.Connector`. Adding a new PSP is a single new folder — the orchestrator, routing engine, and ledger never change.
 
 ---
 
@@ -684,10 +688,10 @@ This is intentionally simple for V1; the `risk.Engine` interface should be desig
 
 | Phase | Scope |
 |---|---|
-| **V1 (this doc)** | 6 PSPs, server-to-server API, modular monolith, rule-based routing |
-| **V2** | Embeddable JS widget (built on the Checkout Session API above), hosted checkout page fallback for merchants without frontend dev resources |
-| **V3** | Success-rate/cost-weighted smart routing (data-driven, same `Router` interface), additional PSPs/rails (e.g. Airtel Money direct, additional African card processors), merchant self-serve dashboard |
-| **V4** | Extract Connector Layer and Ledger Service into independently deployed services if/when scale demands it; multi-region active-active; on-prem/private connectivity options for large merchants |
+| **V1 (current)** | M-Pesa (STK Push + B2C) + Paystack (cards/mobile money); server-to-server API; merchant portal; modular monolith; rule-based routing; ArgoCD/Helm deployment |
+| **V2** | Stripe (cards/wallets, global) + PayPal (Orders API v2); embeddable JS checkout widget built on the existing Checkout Session API; hosted checkout page fallback |
+| **V3** | Success-rate/cost-weighted smart routing (data-driven, same `Router` interface); Airtel Money and additional African card processors; KYC/AML merchant onboarding module |
+| **V4** | Extract Connector Layer and Ledger Service into independently deployed services if/when scale demands it; multi-region active-active; on-prem/private connectivity for large merchants |
 
 ---
 
